@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { HelpCircle, Check, SkipForward, Tag } from 'lucide-react';
 import { Card } from '../components/ui/Card';
-import { Badge } from '../components/ui/Badge';
 import { EmptyState } from '../components/ui/EmptyState';
 import { PageLoader } from '../components/ui/LoadingSpinner';
 import { api } from '../api/client';

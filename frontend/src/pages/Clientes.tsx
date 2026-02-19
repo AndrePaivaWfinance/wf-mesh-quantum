@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Users, Plus, Search, Building2, CreditCard, Settings2, X } from 'lucide-react';
-import { Card, CardHeader } from '../components/ui/Card';
+import { Card } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { EmptyState } from '../components/ui/EmptyState';
 import { PageLoader } from '../components/ui/LoadingSpinner';

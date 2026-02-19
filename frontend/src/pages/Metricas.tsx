@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { BarChart3, Cpu, Target, Gauge, GitCompare } from 'lucide-react';
+import { BarChart3, Target, Gauge, GitCompare } from 'lucide-react';
 import {
   LineChart,
   Line,
@@ -8,8 +8,6 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  BarChart,
-  Bar,
   PieChart,
   Pie,
   Cell,

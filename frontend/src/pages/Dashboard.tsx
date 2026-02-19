@@ -6,8 +6,6 @@ import {
   CheckCircle2,
   AlertTriangle,
   Activity,
-  TrendingUp,
-  Zap,
 } from 'lucide-react';
 import {
   AreaChart,
@@ -19,7 +17,6 @@ import {
   ResponsiveContainer,
   BarChart,
   Bar,
-  Legend,
 } from 'recharts';
 import { KPICard } from '../components/ui/KPICard';
 import { Card, CardHeader } from '../components/ui/Card';
