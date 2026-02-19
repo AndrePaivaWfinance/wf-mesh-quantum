@@ -25,6 +25,15 @@ import { PageLoader } from '../components/ui/LoadingSpinner';
 import { api } from '../api/client';
 import { mockDashboard } from '../data/mock';
 
+const tooltipStyle = {
+  backgroundColor: '#fff',
+  border: '1px solid #e5e7ee',
+  borderRadius: '12px',
+  color: '#111827',
+  fontSize: 12,
+  boxShadow: '0 4px 24px rgba(0,0,0,0.06)',
+};
+
 export function Dashboard() {
   const [data, setData] = useState(mockDashboard);
   const [loading, setLoading] = useState(true);
@@ -55,17 +64,17 @@ export function Dashboard() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {/* Page Header */}
       <div>
-        <h1 className="text-2xl font-bold text-surface-900 dark:text-white">Dashboard</h1>
-        <p className="text-sm text-surface-500 dark:text-surface-400 mt-1">
-          Visão geral das operações BPO
+        <h1 className="text-2xl font-bold text-surface-900">Dashboard</h1>
+        <p className="text-sm text-surface-400 mt-1">
+          Visao geral das operacoes BPO
         </p>
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
         <KPICard
           title="Clientes Ativos"
           value={kpis.clientesAtivos}
@@ -75,17 +84,17 @@ export function Dashboard() {
           trend={5.2}
         />
         <KPICard
-          title="Transações Hoje"
+          title="Transacoes Hoje"
           value={kpis.transacoesHoje.toLocaleString('pt-BR')}
-          subtitle={`${kpis.transacoesMes.toLocaleString('pt-BR')} no mês`}
+          subtitle={`${kpis.transacoesMes.toLocaleString('pt-BR')} no mes`}
           icon={ArrowUpDown}
           color="green"
           trend={12.4}
         />
         <KPICard
-          title="Taxa Classificação"
+          title="Taxa Classificacao"
           value={`${kpis.taxaClassificacao}%`}
-          subtitle="Precisão do modelo AI"
+          subtitle="Precisao do modelo AI"
           icon={Brain}
           color="purple"
           trend={1.8}
@@ -101,11 +110,11 @@ export function Dashboard() {
       </div>
 
       {/* Second row KPIs */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
         <KPICard
-          title="Taxa Aprovação"
+          title="Taxa Aprovacao"
           value={`${kpis.taxaAprovacao}%`}
-          subtitle="Aprovações automáticas"
+          subtitle="Aprovacoes automaticas"
           icon={CheckCircle2}
           color="green"
           trend={3.1}
@@ -118,22 +127,22 @@ export function Dashboard() {
           color="cyan"
           trend={2.5}
         />
-        <Card className="md:col-span-2">
+        <Card className="md:col-span-2 bg-white rounded-2xl border border-surface-200/60 shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-surface-500 dark:text-surface-400">Pipeline Atual</p>
-              <p className="mt-1 text-lg font-semibold text-surface-900 dark:text-white">{pipeline.etapa}</p>
+              <p className="text-xs font-medium text-surface-400 tracking-wide">Pipeline Atual</p>
+              <p className="mt-1.5 text-lg font-semibold text-surface-900">{pipeline.etapa}</p>
             </div>
             <Badge variant={pipeline.status === 'running' ? 'success' : 'default'}>
-              {pipeline.status === 'running' ? 'Em execução' : pipeline.status}
+              {pipeline.status === 'running' ? 'Em execucao' : pipeline.status}
             </Badge>
           </div>
-          <div className="mt-3">
-            <div className="flex items-center justify-between text-xs text-surface-500 mb-1.5">
+          <div className="mt-4">
+            <div className="flex items-center justify-between text-xs text-surface-400 mb-2">
               <span>Progresso</span>
               <span>{pipeline.progresso}%</span>
             </div>
-            <div className="h-2 bg-surface-200 dark:bg-surface-700 rounded-full overflow-hidden">
+            <div className="h-2 bg-surface-100 rounded-full overflow-hidden">
               <div
                 className="h-full bg-primary-500 rounded-full transition-all duration-500"
                 style={{ width: `${pipeline.progresso}%` }}
@@ -146,57 +155,50 @@ export function Dashboard() {
       {/* Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Area Chart */}
-        <Card className="lg:col-span-2">
+        <Card className="lg:col-span-2 bg-white rounded-2xl border border-surface-200/60 shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
           <CardHeader
-            title="Transações (7 dias)"
-            subtitle="Volume de processamento diário"
+            title="Transacoes (7 dias)"
+            subtitle="Volume de processamento diario"
             action={
-              <div className="flex items-center gap-4 text-xs">
+              <div className="flex items-center gap-4 text-xs text-surface-600">
                 <span className="flex items-center gap-1.5">
-                  <span className="w-3 h-3 rounded-full bg-primary-500" /> Transações
+                  <span className="w-2.5 h-2.5 rounded-full bg-primary-500" /> Transacoes
                 </span>
                 <span className="flex items-center gap-1.5">
-                  <span className="w-3 h-3 rounded-full bg-green-500" /> Classificadas
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" /> Classificadas
                 </span>
               </div>
             }
           />
-          <div className="h-[280px] -mx-2">
+          <div className="h-[280px] -mx-2 mt-2">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={metricas}>
                 <defs>
                   <linearGradient id="gradientTransacoes" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                    <stop offset="5%" stopColor="#7c3aed" stopOpacity={0.15} />
+                    <stop offset="95%" stopColor="#7c3aed" stopOpacity={0} />
                   </linearGradient>
                   <linearGradient id="gradientClassificadas" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#22c55e" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#22c55e" stopOpacity={0} />
+                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.15} />
+                    <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.3} />
-                <XAxis dataKey="data" tick={{ fontSize: 12, fill: '#94a3b8' }} />
-                <YAxis tick={{ fontSize: 12, fill: '#94a3b8' }} />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: '#1e293b',
-                    border: '1px solid #334155',
-                    borderRadius: '8px',
-                    color: '#f1f5f9',
-                  }}
-                />
+                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7ee" opacity={0.6} />
+                <XAxis dataKey="data" tick={{ fontSize: 11, fill: '#9ca3b4' }} />
+                <YAxis tick={{ fontSize: 11, fill: '#9ca3b4' }} />
+                <Tooltip contentStyle={tooltipStyle} />
                 <Area
                   type="monotone"
                   dataKey="transacoes"
-                  stroke="#3b82f6"
+                  stroke="#7c3aed"
                   strokeWidth={2}
                   fill="url(#gradientTransacoes)"
-                  name="Transações"
+                  name="Transacoes"
                 />
                 <Area
                   type="monotone"
                   dataKey="classificadas"
-                  stroke="#22c55e"
+                  stroke="#10b981"
                   strokeWidth={2}
                   fill="url(#gradientClassificadas)"
                   name="Classificadas"
@@ -207,23 +209,16 @@ export function Dashboard() {
         </Card>
 
         {/* Anomalies Bar Chart */}
-        <Card>
+        <Card className="bg-white rounded-2xl border border-surface-200/60 shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
           <CardHeader title="Anomalias" subtitle="Por dia da semana" />
-          <div className="h-[280px]">
+          <div className="h-[280px] mt-2">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={metricas}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.3} />
-                <XAxis dataKey="data" tick={{ fontSize: 11, fill: '#94a3b8' }} />
-                <YAxis tick={{ fontSize: 11, fill: '#94a3b8' }} />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: '#1e293b',
-                    border: '1px solid #334155',
-                    borderRadius: '8px',
-                    color: '#f1f5f9',
-                  }}
-                />
-                <Bar dataKey="anomalias" fill="#f59e0b" radius={[4, 4, 0, 0]} name="Anomalias" />
+                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7ee" opacity={0.6} />
+                <XAxis dataKey="data" tick={{ fontSize: 11, fill: '#9ca3b4' }} />
+                <YAxis tick={{ fontSize: 11, fill: '#9ca3b4' }} />
+                <Tooltip contentStyle={tooltipStyle} />
+                <Bar dataKey="anomalias" fill="#f59e0b" radius={[6, 6, 0, 0]} name="Anomalias" />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -231,19 +226,19 @@ export function Dashboard() {
       </div>
 
       {/* Alerts */}
-      <Card>
-        <CardHeader title="Alertas Recentes" subtitle="Últimas notificações do sistema" />
-        <div className="space-y-3">
+      <Card className="bg-white rounded-2xl border border-surface-200/60 shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
+        <CardHeader title="Alertas Recentes" subtitle="Ultimas notificacoes do sistema" />
+        <div className="space-y-3 mt-1">
           {alertas.map((alerta) => (
             <div
               key={alerta.id}
-              className="flex items-start gap-3 p-3 rounded-lg bg-surface-50 dark:bg-surface-800/50"
+              className="flex items-start gap-3 p-3.5 bg-surface-50 rounded-xl"
             >
               <Badge variant={alertVariant(alerta.tipo)}>
                 {alerta.tipo === 'error' ? 'Erro' : alerta.tipo === 'warning' ? 'Aviso' : alerta.tipo === 'success' ? 'OK' : 'Info'}
               </Badge>
               <div className="flex-1 min-w-0">
-                <p className="text-sm text-surface-700 dark:text-surface-300">{alerta.mensagem}</p>
+                <p className="text-sm text-surface-600">{alerta.mensagem}</p>
                 <p className="text-xs text-surface-400 mt-1">
                   {new Date(alerta.criadoEm).toLocaleString('pt-BR')}
                 </p>

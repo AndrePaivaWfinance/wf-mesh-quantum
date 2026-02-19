@@ -73,18 +73,18 @@ export function Clientes() {
   if (loading) return <PageLoader />;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-surface-900 dark:text-white">Clientes</h1>
-          <p className="text-sm text-surface-500 dark:text-surface-400 mt-1">
-            Gestão de clientes BPO
+          <h1 className="text-2xl font-bold text-surface-900">Clientes</h1>
+          <p className="text-sm text-surface-400 mt-1">
+            Gestao de clientes BPO
           </p>
         </div>
         <button
           onClick={() => { setEditingId(null); setForm({ nome: '', cnpj: '', sistema: 'nibo', plano: 'Essencial', fontes: ['nibo'] }); setShowModal(true); }}
-          className="flex items-center gap-2 px-4 py-2.5 bg-primary-600 hover:bg-primary-700 text-white rounded-lg text-sm font-medium transition-colors"
+          className="flex items-center gap-2 px-4 py-2.5 bg-primary-600 hover:bg-primary-700 text-white rounded-xl shadow-sm text-sm font-medium transition-colors"
         >
           <Plus className="w-4 h-4" /> Novo Cliente
         </button>
@@ -92,13 +92,13 @@ export function Clientes() {
 
       {/* Search */}
       <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-surface-400" />
+        <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-surface-300" />
         <input
           type="text"
           placeholder="Buscar por nome ou CNPJ..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="w-full pl-10 pr-4 py-2.5 bg-white dark:bg-surface-900 border border-surface-200 dark:border-surface-700 rounded-lg text-sm text-surface-900 dark:text-white placeholder:text-surface-400 focus:outline-none focus:ring-2 focus:ring-primary-500"
+          className="w-full pl-10 pr-4 py-2.5 bg-white border border-surface-200 rounded-xl text-sm text-surface-900 placeholder:text-surface-300 focus:outline-none focus:ring-2 focus:ring-primary-500/30 focus:border-primary-400 transition-colors"
         />
       </div>
 
@@ -107,39 +107,43 @@ export function Clientes() {
         <EmptyState
           icon={Users}
           title="Nenhum cliente encontrado"
-          description="Adicione seu primeiro cliente para começar."
+          description="Adicione seu primeiro cliente para comecar."
           action={{ label: 'Novo Cliente', onClick: () => setShowModal(true) }}
         />
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           {filtered.map((c) => (
-            <Card key={c.id} className="hover:shadow-md transition-shadow cursor-pointer" padding={false}>
-              <div className="p-5">
-                <div className="flex items-start justify-between mb-3">
+            <Card
+              key={c.id}
+              className="bg-white rounded-2xl border border-surface-200/60 shadow-[0_1px_3px_rgba(0,0,0,0.04)] hover:shadow-[0_4px_12px_rgba(0,0,0,0.06)] transition-shadow cursor-pointer"
+              padding={false}
+            >
+              <div className="p-6">
+                <div className="flex items-start justify-between mb-4">
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-lg bg-primary-100 dark:bg-primary-900/30 flex items-center justify-center">
-                      <Building2 className="w-5 h-5 text-primary-600 dark:text-primary-400" />
+                    <div className="w-10 h-10 rounded-xl bg-primary-50 flex items-center justify-center">
+                      <Building2 className="w-5 h-5 text-primary-500" />
                     </div>
                     <div>
-                      <h3 className="font-semibold text-surface-900 dark:text-white">{c.nome}</h3>
-                      <p className="text-xs text-surface-500">{c.cnpj}</p>
+                      <h3 className="font-semibold text-surface-900">{c.nome}</h3>
+                      <p className="text-xs text-surface-400 mt-0.5">{c.cnpj}</p>
                     </div>
                   </div>
                   <Badge variant={statusVariant[c.status]}>{statusLabel[c.status]}</Badge>
                 </div>
 
-                <div className="flex items-center gap-4 text-xs text-surface-500 dark:text-surface-400 mb-4">
-                  <span className="flex items-center gap-1">
+                <div className="flex items-center gap-4 text-xs text-surface-400 mb-4">
+                  <span className="flex items-center gap-1.5">
                     <CreditCard className="w-3.5 h-3.5" /> {c.sistema.toUpperCase()}
                   </span>
                   <Badge variant={planoVariant[c.plano] || 'default'}>{c.plano}</Badge>
                 </div>
 
-                <div className="flex flex-wrap gap-1.5 mb-4">
+                <div className="flex flex-wrap gap-1.5 mb-5">
                   {c.fontes.map((f: string) => (
                     <span
                       key={f}
-                      className="px-2 py-0.5 rounded text-xs bg-surface-100 dark:bg-surface-800 text-surface-600 dark:text-surface-400"
+                      className="px-2 py-0.5 rounded-md text-xs bg-surface-50 text-surface-500"
                     >
                       {f}
                     </span>
@@ -148,7 +152,7 @@ export function Clientes() {
 
                 <button
                   onClick={() => openEdit(c)}
-                  className="w-full py-2 rounded-lg border border-surface-200 dark:border-surface-700 text-sm font-medium text-surface-600 dark:text-surface-400 hover:bg-surface-50 dark:hover:bg-surface-800 transition-colors flex items-center justify-center gap-2"
+                  className="w-full py-2 rounded-xl border border-surface-200 text-sm font-medium text-surface-500 hover:bg-surface-50 transition-colors flex items-center justify-center gap-2"
                 >
                   <Settings2 className="w-4 h-4" /> Editar
                 </button>
@@ -160,15 +164,15 @@ export function Clientes() {
 
       {/* Modal */}
       {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-          <div className="bg-white dark:bg-surface-900 rounded-xl border border-surface-200 dark:border-surface-700 shadow-xl w-full max-w-md p-6">
+        <div className="fixed inset-0 z-50 flex items-center justify-center backdrop-blur-sm bg-black/30">
+          <div className="bg-white rounded-2xl shadow-2xl border border-surface-200/60 w-full max-w-md p-6">
             <div className="flex items-center justify-between mb-6">
-              <h2 className="text-lg font-bold text-surface-900 dark:text-white">
+              <h2 className="text-lg font-bold text-surface-900">
                 {editingId ? 'Editar Cliente' : 'Novo Cliente'}
               </h2>
               <button
                 onClick={() => setShowModal(false)}
-                className="p-1 rounded-lg hover:bg-surface-100 dark:hover:bg-surface-800"
+                className="p-1.5 rounded-xl hover:bg-surface-50 transition-colors"
               >
                 <X className="w-5 h-5 text-surface-400" />
               </button>
@@ -176,30 +180,30 @@ export function Clientes() {
 
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-surface-700 dark:text-surface-300 mb-1">Nome</label>
+                <label className="block text-xs font-medium text-surface-500 mb-1.5">Nome</label>
                 <input
                   value={form.nome}
                   onChange={(e) => setForm({ ...form, nome: e.target.value })}
-                  className="w-full px-3 py-2 bg-surface-50 dark:bg-surface-800 border border-surface-200 dark:border-surface-700 rounded-lg text-sm text-surface-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  className="w-full px-3 py-2.5 bg-surface-50 border border-surface-200 rounded-xl text-sm text-surface-900 placeholder:text-surface-300 focus:outline-none focus:ring-2 focus:ring-primary-500/30 focus:border-primary-400 transition-colors"
                   placeholder="Nome da empresa"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-surface-700 dark:text-surface-300 mb-1">CNPJ</label>
+                <label className="block text-xs font-medium text-surface-500 mb-1.5">CNPJ</label>
                 <input
                   value={form.cnpj}
                   onChange={(e) => setForm({ ...form, cnpj: e.target.value })}
-                  className="w-full px-3 py-2 bg-surface-50 dark:bg-surface-800 border border-surface-200 dark:border-surface-700 rounded-lg text-sm text-surface-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  className="w-full px-3 py-2.5 bg-surface-50 border border-surface-200 rounded-xl text-sm text-surface-900 placeholder:text-surface-300 focus:outline-none focus:ring-2 focus:ring-primary-500/30 focus:border-primary-400 transition-colors"
                   placeholder="00.000.000/0001-00"
                 />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-surface-700 dark:text-surface-300 mb-1">Sistema</label>
+                  <label className="block text-xs font-medium text-surface-500 mb-1.5">Sistema</label>
                   <select
                     value={form.sistema}
                     onChange={(e) => setForm({ ...form, sistema: e.target.value })}
-                    className="w-full px-3 py-2 bg-surface-50 dark:bg-surface-800 border border-surface-200 dark:border-surface-700 rounded-lg text-sm text-surface-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    className="w-full px-3 py-2.5 bg-surface-50 border border-surface-200 rounded-xl text-sm text-surface-900 focus:outline-none focus:ring-2 focus:ring-primary-500/30 focus:border-primary-400 transition-colors"
                   >
                     <option value="nibo">Nibo</option>
                     <option value="omie">Omie</option>
@@ -207,11 +211,11 @@ export function Clientes() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-surface-700 dark:text-surface-300 mb-1">Plano</label>
+                  <label className="block text-xs font-medium text-surface-500 mb-1.5">Plano</label>
                   <select
                     value={form.plano}
                     onChange={(e) => setForm({ ...form, plano: e.target.value })}
-                    className="w-full px-3 py-2 bg-surface-50 dark:bg-surface-800 border border-surface-200 dark:border-surface-700 rounded-lg text-sm text-surface-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    className="w-full px-3 py-2.5 bg-surface-50 border border-surface-200 rounded-xl text-sm text-surface-900 focus:outline-none focus:ring-2 focus:ring-primary-500/30 focus:border-primary-400 transition-colors"
                   >
                     <option value="Essencial">Essencial</option>
                     <option value="Avançado">Avançado</option>
@@ -224,13 +228,13 @@ export function Clientes() {
             <div className="flex gap-3 mt-6">
               <button
                 onClick={() => setShowModal(false)}
-                className="flex-1 py-2.5 rounded-lg border border-surface-200 dark:border-surface-700 text-sm font-medium text-surface-600 dark:text-surface-400 hover:bg-surface-50 dark:hover:bg-surface-800 transition-colors"
+                className="flex-1 py-2.5 rounded-xl border border-surface-200 text-sm font-medium text-surface-500 hover:bg-surface-50 transition-colors"
               >
                 Cancelar
               </button>
               <button
                 onClick={handleSave}
-                className="flex-1 py-2.5 rounded-lg bg-primary-600 hover:bg-primary-700 text-white text-sm font-medium transition-colors"
+                className="flex-1 py-2.5 rounded-xl bg-primary-600 hover:bg-primary-700 text-white text-sm font-medium shadow-sm transition-colors"
               >
                 {editingId ? 'Salvar' : 'Criar'}
               </button>
