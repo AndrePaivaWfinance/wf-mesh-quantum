@@ -18,7 +18,17 @@ import { PageLoader } from '../components/ui/LoadingSpinner';
 import { api } from '../api/client';
 import { mockFilas, mockMetrics } from '../data/mock';
 
-const COLORS = ['#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'];
+const COLORS = ['#7c3aed', '#10b981', '#f59e0b', '#ef4444', '#06b6d4', '#ec4899'];
+
+const tooltipStyle = {
+  backgroundColor: '#fff',
+  border: '1px solid #e5e7ee',
+  borderRadius: '12px',
+  color: '#111827',
+  boxShadow: '0 4px 24px rgba(0,0,0,0.06)',
+};
+
+const axisTick = { fill: '#9ca3b4', fontSize: 12 };
 
 export function Metricas() {
   const [filas, setFilas] = useState(mockFilas);
@@ -48,10 +58,10 @@ export function Metricas() {
   if (loading) return <PageLoader />;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <div>
-        <h1 className="text-2xl font-bold text-surface-900 dark:text-white">Métricas & Filas</h1>
-        <p className="text-sm text-surface-500 dark:text-surface-400 mt-1">
+        <h1 className="text-2xl font-bold text-surface-900">Métricas & Filas</h1>
+        <p className="text-sm text-surface-400 mt-1">
           Monitoramento de performance e filas de processamento
         </p>
       </div>
@@ -96,10 +106,10 @@ export function Metricas() {
           action={
             <div className="flex items-center gap-4 text-xs">
               <span className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded-full bg-primary-500" /> Latência (ms)
+                <span className="w-3 h-3 rounded-full bg-[#7c3aed]" /> Latência (ms)
               </span>
               <span className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded-full bg-green-500" /> Throughput (tx/min)
+                <span className="w-3 h-3 rounded-full bg-[#10b981]" /> Throughput (tx/min)
               </span>
             </div>
           }
@@ -107,34 +117,27 @@ export function Metricas() {
         <div className="h-[300px]">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={metrics.performance}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.3} />
-              <XAxis dataKey="hora" tick={{ fontSize: 12, fill: '#94a3b8' }} />
-              <YAxis yAxisId="left" tick={{ fontSize: 12, fill: '#94a3b8' }} />
-              <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12, fill: '#94a3b8' }} />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: '#1e293b',
-                  border: '1px solid #334155',
-                  borderRadius: '8px',
-                  color: '#f1f5f9',
-                }}
-              />
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7ee" opacity={0.6} />
+              <XAxis dataKey="hora" tick={axisTick} />
+              <YAxis yAxisId="left" tick={axisTick} />
+              <YAxis yAxisId="right" orientation="right" tick={axisTick} />
+              <Tooltip contentStyle={tooltipStyle} />
               <Line
                 yAxisId="left"
                 type="monotone"
                 dataKey="latencia"
-                stroke="#3b82f6"
+                stroke="#7c3aed"
                 strokeWidth={2}
-                dot={{ fill: '#3b82f6', r: 4 }}
+                dot={{ fill: '#7c3aed', r: 4 }}
                 name="Latência (ms)"
               />
               <Line
                 yAxisId="right"
                 type="monotone"
                 dataKey="throughput"
-                stroke="#22c55e"
+                stroke="#10b981"
                 strokeWidth={2}
-                dot={{ fill: '#22c55e', r: 4 }}
+                dot={{ fill: '#10b981', r: 4 }}
                 name="Throughput (tx/min)"
               />
             </LineChart>
@@ -150,13 +153,13 @@ export function Metricas() {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-surface-200 dark:border-surface-700">
-                  <th className="text-left py-3 px-4 font-medium text-surface-500 dark:text-surface-400">Fila</th>
-                  <th className="text-center py-3 px-4 font-medium text-orange-500">Pendentes</th>
-                  <th className="text-center py-3 px-4 font-medium text-blue-500">Processando</th>
-                  <th className="text-center py-3 px-4 font-medium text-green-500">Concluídos</th>
-                  <th className="text-center py-3 px-4 font-medium text-red-500">Erros</th>
-                  <th className="text-left py-3 px-4 font-medium text-surface-500 dark:text-surface-400">Progresso</th>
+                <tr className="border-b border-surface-100">
+                  <th className="text-left py-3 px-4 text-surface-400 text-xs uppercase tracking-wide font-medium">Fila</th>
+                  <th className="text-center py-3 px-4 text-surface-400 text-xs uppercase tracking-wide font-medium">Pendentes</th>
+                  <th className="text-center py-3 px-4 text-surface-400 text-xs uppercase tracking-wide font-medium">Processando</th>
+                  <th className="text-center py-3 px-4 text-surface-400 text-xs uppercase tracking-wide font-medium">Concluídos</th>
+                  <th className="text-center py-3 px-4 text-surface-400 text-xs uppercase tracking-wide font-medium">Erros</th>
+                  <th className="text-left py-3 px-4 text-surface-400 text-xs uppercase tracking-wide font-medium">Progresso</th>
                 </tr>
               </thead>
               <tbody>
@@ -166,34 +169,34 @@ export function Metricas() {
                   return (
                     <tr
                       key={f.nome}
-                      className="border-b border-surface-100 dark:border-surface-800 hover:bg-surface-50 dark:hover:bg-surface-800/50"
+                      className="border-b border-surface-100 hover:bg-surface-50/80 transition-colors"
                     >
-                      <td className="py-3 px-4 font-medium text-surface-900 dark:text-white">{f.nome}</td>
+                      <td className="py-3 px-4 font-medium text-surface-900">{f.nome}</td>
                       <td className="py-3 px-4 text-center">
-                        <span className="inline-flex items-center justify-center w-8 h-6 rounded bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400 text-xs font-semibold">
+                        <span className="inline-flex items-center justify-center w-8 h-6 rounded bg-amber-50 text-amber-600 text-xs font-semibold">
                           {f.pendentes}
                         </span>
                       </td>
                       <td className="py-3 px-4 text-center">
-                        <span className="inline-flex items-center justify-center w-8 h-6 rounded bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 text-xs font-semibold">
+                        <span className="inline-flex items-center justify-center w-8 h-6 rounded bg-sky-50 text-sky-600 text-xs font-semibold">
                           {f.processando}
                         </span>
                       </td>
                       <td className="py-3 px-4 text-center">
-                        <span className="inline-flex items-center justify-center min-w-8 h-6 px-1 rounded bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400 text-xs font-semibold">
+                        <span className="inline-flex items-center justify-center min-w-8 h-6 px-1 rounded bg-emerald-50 text-emerald-600 text-xs font-semibold">
                           {f.concluidos}
                         </span>
                       </td>
                       <td className="py-3 px-4 text-center">
-                        <span className="inline-flex items-center justify-center w-8 h-6 rounded bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-xs font-semibold">
+                        <span className="inline-flex items-center justify-center w-8 h-6 rounded bg-red-50 text-red-500 text-xs font-semibold">
                           {f.erros}
                         </span>
                       </td>
                       <td className="py-3 px-4">
                         <div className="flex items-center gap-2">
-                          <div className="flex-1 h-2 bg-surface-200 dark:bg-surface-700 rounded-full overflow-hidden">
+                          <div className="flex-1 h-2 bg-surface-100 rounded-full overflow-hidden">
                             <div
-                              className="h-full bg-green-500 rounded-full"
+                              className="h-full bg-emerald-500 rounded-full"
                               style={{ width: `${pct}%` }}
                             />
                           </div>
@@ -227,14 +230,7 @@ export function Metricas() {
                     <Cell key={i} fill={COLORS[i % COLORS.length]} />
                   ))}
                 </Pie>
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: '#1e293b',
-                    border: '1px solid #334155',
-                    borderRadius: '8px',
-                    color: '#f1f5f9',
-                  }}
-                />
+                <Tooltip contentStyle={tooltipStyle} />
               </PieChart>
             </ResponsiveContainer>
           </div>
@@ -243,9 +239,9 @@ export function Metricas() {
               <div key={d.name} className="flex items-center justify-between text-xs">
                 <span className="flex items-center gap-2">
                   <span className="w-3 h-3 rounded-full" style={{ backgroundColor: COLORS[i % COLORS.length] }} />
-                  <span className="text-surface-600 dark:text-surface-400">{d.name}</span>
+                  <span className="text-surface-500">{d.name}</span>
                 </span>
-                <span className="font-medium text-surface-900 dark:text-white">{d.value}</span>
+                <span className="text-surface-900 font-semibold">{d.value}</span>
               </div>
             ))}
           </div>

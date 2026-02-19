@@ -10,7 +10,6 @@ import {
   ArrowUpDown,
   Search,
 } from 'lucide-react';
-import { Card } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { EmptyState } from '../components/ui/EmptyState';
 import { PageLoader } from '../components/ui/LoadingSpinner';
@@ -54,10 +53,10 @@ export function Historico() {
   if (loading) return <PageLoader />;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <div>
-        <h1 className="text-2xl font-bold text-surface-900 dark:text-white">Histórico</h1>
-        <p className="text-sm text-surface-500 dark:text-surface-400 mt-1">
+        <h1 className="text-2xl font-bold text-surface-900">Histórico</h1>
+        <p className="text-sm text-surface-400 mt-1">
           Log de todas as ações e eventos do sistema
         </p>
       </div>
@@ -65,22 +64,22 @@ export function Historico() {
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3">
         <div className="relative flex-1 min-w-[200px] max-w-md">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-surface-400" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-surface-300" />
           <input
             type="text"
             placeholder="Buscar ações..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 bg-white dark:bg-surface-900 border border-surface-200 dark:border-surface-700 rounded-lg text-sm text-surface-900 dark:text-white placeholder:text-surface-400 focus:outline-none focus:ring-2 focus:ring-primary-500"
+            className="w-full pl-9 pr-4 py-2 bg-white border border-surface-200 rounded-xl text-sm text-surface-900 placeholder:text-surface-300 focus:outline-none focus:ring-2 focus:ring-primary-500/30 focus:border-primary-400"
           />
         </div>
         <div className="flex gap-1.5">
           <button
             onClick={() => setFilterTipo('todos')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+            className={`px-3 py-1.5 text-xs font-medium transition-colors ${
               filterTipo === 'todos'
-                ? 'bg-primary-600 text-white'
-                : 'bg-surface-100 dark:bg-surface-800 text-surface-600 dark:text-surface-400 hover:bg-surface-200 dark:hover:bg-surface-700'
+                ? 'bg-primary-600 text-white rounded-xl'
+                : 'bg-white border border-surface-200 text-surface-500 hover:bg-surface-50 rounded-xl'
             }`}
           >
             Todos
@@ -89,10 +88,10 @@ export function Historico() {
             <button
               key={key}
               onClick={() => setFilterTipo(key)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+              className={`px-3 py-1.5 text-xs font-medium transition-colors ${
                 filterTipo === key
-                  ? 'bg-primary-600 text-white'
-                  : 'bg-surface-100 dark:bg-surface-800 text-surface-600 dark:text-surface-400 hover:bg-surface-200 dark:hover:bg-surface-700'
+                  ? 'bg-primary-600 text-white rounded-xl'
+                  : 'bg-white border border-surface-200 text-surface-500 hover:bg-surface-50 rounded-xl'
               }`}
             >
               {cfg.label}
@@ -109,25 +108,25 @@ export function Historico() {
           description="Ajuste seus filtros para ver o histórico."
         />
       ) : (
-        <Card padding={false}>
-          <div className="divide-y divide-surface-100 dark:divide-surface-800">
+        <div className="bg-white rounded-2xl border border-surface-200/60 shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
+          <div className="divide-y divide-surface-100">
             {filtered.map((item) => {
               const cfg = tipoConfig[item.tipo] || tipoConfig.ciclo;
               const Icon = cfg.icon;
               return (
                 <div
                   key={item.id}
-                  className="flex items-start gap-4 p-4 hover:bg-surface-50 dark:hover:bg-surface-800/50 transition-colors"
+                  className="flex items-start gap-4 p-4 hover:bg-surface-50/80 transition-colors"
                 >
                   <div className={`mt-0.5 ${cfg.color}`}>
                     <Icon className="w-5 h-5" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm text-surface-900 dark:text-white">{item.descricao}</p>
+                    <p className="text-sm text-surface-800">{item.descricao}</p>
                     <div className="flex items-center gap-3 mt-1.5">
                       <Badge variant={cfg.variant}>{cfg.label}</Badge>
                       {item.clientName && (
-                        <span className="text-xs text-surface-500">{item.clientName}</span>
+                        <span className="text-xs text-surface-400">{item.clientName}</span>
                       )}
                       <span className="text-xs text-surface-400">
                         por <strong>{item.usuario}</strong>
@@ -141,7 +140,7 @@ export function Historico() {
               );
             })}
           </div>
-        </Card>
+        </div>
       )}
     </div>
   );
