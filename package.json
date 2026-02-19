@@ -10,7 +10,8 @@
         "prestart": "npm run build",
         "start": "func start",
         "dev": "npm run build && node scripts/dev-server.js",
-        "test": "jest"
+        "test": "jest",
+        "test:integration": "npx ts-node scripts/integration-test.ts"
     },
     "dependencies": {
         "@azure/data-tables": "^13.2.2",
