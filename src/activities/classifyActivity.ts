@@ -10,6 +10,7 @@ import { InvocationContext } from '@azure/functions';
 import OpenAI from 'openai';
 import { createLogger } from '../../shared/utils';
 import { TransactionType, TransactionStatus } from '../types';
+import { getOpenAIClient as getAIClient, DEFAULT_MODEL } from '../ai/openaiClient';
 
 const logger = createLogger('ClassifyActivity');
 
@@ -145,11 +146,7 @@ df.app.activity('classifyActivity', {
 
 // Helper functions
 function getOpenAIClient(): OpenAI {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error('OPENAI_API_KEY not configured');
-  }
-  return new OpenAI({ apiKey });
+  return getAIClient();
 }
 
 async function getUnclassifiedTransactions(
@@ -215,7 +212,7 @@ Responda APENAS em JSON com o formato:
 }`;
 
   const response = await openai.chat.completions.create({
-    model: 'gpt-4o-mini',
+    model: DEFAULT_MODEL,
     messages: [
       {
         role: 'system',

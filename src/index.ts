@@ -39,4 +39,10 @@ import './activities/feedbackActivity';
 // Metrics
 import './functions/bpoMetrics';
 
+// Ensure storage tables exist on startup
+import { ensureAllTables } from './storage/tableClient';
+ensureAllTables()
+  .then(() => console.log('[operacao-head] Storage tables verified'))
+  .catch((err) => console.warn('[operacao-head] Table init warning:', err.message));
+
 console.log('[operacao-head] Functions registered');

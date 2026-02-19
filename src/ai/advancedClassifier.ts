@@ -1,14 +1,15 @@
 import OpenAI from 'openai';
 import { Transaction, ClassificationResult, FeedbackRecord } from '../../shared/types';
+import { getOpenAIClient, ADVANCED_MODEL } from './openaiClient';
 
 /**
  * Classificador Avançado (80/20 System)
- * 
+ *
  * Responsável por classificar transações com alta precisão e aprendizado contínuo.
  */
 export class AdvancedClassifier {
     private readonly CONFIDENCE_THRESHOLD_AUTO = 0.85; // 85% para automação
-    private readonly MODEL_VERSION = 'gpt-4-turbo-preview';
+    private readonly MODEL_VERSION = ADVANCED_MODEL;
     private openai: OpenAI;
 
     constructor(
@@ -16,10 +17,7 @@ export class AdvancedClassifier {
         private readonly organizationId?: string
     ) {
         if (!apiKey) throw new Error('OpenAI API Key is required');
-        this.openai = new OpenAI({
-            apiKey: apiKey,
-            organization: organizationId
-        });
+        this.openai = getOpenAIClient(apiKey);
     }
 
     /**
