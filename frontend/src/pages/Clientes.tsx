@@ -64,7 +64,7 @@ export function Clientes() {
     setForm({ nome: '', cnpj: '', sistema: 'nibo', plano: 'Essencial', fontes: ['nibo'] });
   };
 
-  const openEdit = (c: any) => {
+  const openEdit = (c: (typeof clientes)[number]) => {
     setForm({ nome: c.nome, cnpj: c.cnpj, sistema: c.sistema, plano: c.plano, fontes: c.fontes });
     setEditingId(c.id);
     setShowModal(true);
