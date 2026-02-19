@@ -29,6 +29,7 @@ export {
   upsertClient,
   ensureClientTable,
 } from '../../shared/storage/clientStorage';
+import { ensureClientTable } from '../../shared/storage/clientStorage';
 
 const logger = createLogger('TableClient');
 
@@ -70,6 +71,15 @@ function getTableClient(tableName: string): TableClient {
     tableClients.set(tableName, client);
   }
   return tableClients.get(tableName)!;
+}
+
+/** Garante que todas as tabelas operacionais existem */
+export async function ensureAllTables(): Promise<void> {
+  const tables = Object.values(TABLES);
+  await Promise.all(
+    tables.map((t) => getTableClient(t).createTable().catch(() => {}))
+  );
+  await ensureClientTable();
 }
 
 // ============================================================================
