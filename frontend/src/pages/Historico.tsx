@@ -13,7 +13,7 @@ import {
 import { Badge } from '../components/ui/Badge';
 import { EmptyState } from '../components/ui/EmptyState';
 import { PageLoader } from '../components/ui/LoadingSpinner';
-import { api } from '../api/client';
+import { api, type HistoricoItem } from '../api/client';
 import { mockHistorico } from '../data/mock';
 import type { LucideIcon } from 'lucide-react';
 
@@ -28,7 +28,7 @@ const tipoConfig: Record<string, { icon: LucideIcon; color: string; label: strin
 };
 
 export function Historico() {
-  const [items, setItems] = useState(mockHistorico);
+  const [items, setItems] = useState<HistoricoItem[]>(mockHistorico);
   const [loading, setLoading] = useState(true);
   const [filterTipo, setFilterTipo] = useState<string>('todos');
   const [search, setSearch] = useState('');

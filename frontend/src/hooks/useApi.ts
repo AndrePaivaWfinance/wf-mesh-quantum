@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, type DependencyList } from 'react';
 
 interface UseApiResult<T> {
   data: T | null;
@@ -7,7 +7,7 @@ interface UseApiResult<T> {
   refetch: () => void;
 }
 
-export function useApi<T>(fetcher: () => Promise<T>, deps: any[] = []): UseApiResult<T> {
+export function useApi<T>(fetcher: () => Promise<T>, deps: DependencyList = []): UseApiResult<T> {
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -18,11 +18,12 @@ export function useApi<T>(fetcher: () => Promise<T>, deps: any[] = []): UseApiRe
     try {
       const result = await fetcher();
       setData(result);
-    } catch (err: any) {
-      setError(err.message || 'Erro ao carregar dados');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Erro ao carregar dados');
     } finally {
       setLoading(false);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
 
   useEffect(() => {
