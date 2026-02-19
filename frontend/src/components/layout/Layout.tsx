@@ -6,9 +6,9 @@ export function Layout() {
   return (
     <div className="min-h-screen bg-surface-50 text-surface-900">
       <Sidebar />
-      <div className="ml-[260px]">
+      <div className="ml-[260px] min-h-screen flex flex-col">
         <TopBar />
-        <main className="p-8">
+        <main className="flex-1 p-8">
           <Outlet />
         </main>
       </div>
