@@ -8,6 +8,7 @@
 import OpenAI from 'openai';
 import { createLogger } from '../../shared/utils';
 import { TransactionType, Category } from '../types';
+import { getOpenAIClient, DEFAULT_MODEL } from './openaiClient';
 
 const logger = createLogger('AIClassifier');
 
@@ -42,7 +43,7 @@ export interface ClassifierConfig {
 // ============================================================================
 
 const DEFAULT_CONFIG: ClassifierConfig = {
-  model: 'gpt-4o-mini',
+  model: DEFAULT_MODEL,
   temperature: 0.3,
   confidenceThreshold: 0.8,
 };
@@ -91,7 +92,7 @@ export class TransactionClassifier {
     categories: Category[] = DEFAULT_CATEGORIES,
     config: Partial<ClassifierConfig> = {}
   ) {
-    this.openai = new OpenAI({ apiKey });
+    this.openai = getOpenAIClient(apiKey);
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.categories = categories;
   }
@@ -263,7 +264,7 @@ export function getClassifier(
   const apiKey = process.env.OPENAI_API_KEY;
 
   if (!apiKey) {
-    throw new Error('OPENAI_API_KEY not configured');
+    throw new Error('OPENAI_API_KEY não configurada');
   }
 
   if (!classifierInstance) {
