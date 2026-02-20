@@ -5,17 +5,22 @@
  */
 
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/functions';
+import * as crypto from 'crypto';
 import { getNiboClient } from '../adapters/client';
 import { CaptureRequest, CaptureResponse, NiboPayable, NiboReceivable } from '../adapters/types';
 import { createLogger, nowISO } from '../shared/utils';
-import { createTransactions } from '../../../storage/tableClient';
+import { getExistingSourceIds, upsertTransactionsIdempotent } from '../../../storage/tableClient';
 import { Transaction, TransactionType, TransactionSource, TransactionStatus } from '../../../types';
 
 const logger = createLogger('NiboCapture');
 
+function shortHash(input: string): string {
+  return crypto.createHash('sha256').update(input).digest('hex').substring(0, 16);
+}
+
 function payableToTransaction(p: NiboPayable, clientId: string, cycleId: string): Transaction {
   return {
-    id: `nibo-pagar-${p.id}-${Date.now()}`,
+    id: `nibo-pagar-${shortHash(p.id)}`,
     clientId,
     type: TransactionType.PAGAR,
     status: TransactionStatus.CAPTURADO,
@@ -40,7 +45,7 @@ function payableToTransaction(p: NiboPayable, clientId: string, cycleId: string)
 
 function receivableToTransaction(r: NiboReceivable, clientId: string, cycleId: string): Transaction {
   return {
-    id: `nibo-receber-${r.id}-${Date.now()}`,
+    id: `nibo-receber-${shortHash(r.id)}`,
     clientId,
     type: TransactionType.RECEBER,
     status: TransactionStatus.CAPTURADO,
@@ -86,6 +91,10 @@ app.http('nibo-capture', {
 
       const client = getNiboClient();
 
+      // Buscar transações existentes para idempotência
+      const existingSourceIds = await getExistingSourceIds(clientId, 'nibo');
+      logger.info('Existing Nibo transactions', { count: existingSourceIds.size });
+
       // Capture payables and receivables in parallel
       const [payables, receivables] = await Promise.all([
         client.getPayables(start, end),
@@ -97,16 +106,21 @@ app.http('nibo-capture', {
         receivables: receivables.length,
       });
 
-      // Convert to mesh Transaction format and persist to OperacaoTransactions
+      // Convert to mesh Transaction format
       const transactions: Transaction[] = [
         ...payables.map(p => payableToTransaction(p, clientId, cycleId)),
         ...receivables.map(r => receivableToTransaction(r, clientId, cycleId)),
       ];
 
-      let storedIds: string[] = [];
+      // Persistir com idempotência
+      let result = { created: [] as string[], updated: [] as string[], skipped: [] as string[] };
       if (transactions.length > 0) {
-        storedIds = await createTransactions(transactions);
-        logger.info('Transactions stored in mesh', { stored: storedIds.length });
+        result = await upsertTransactionsIdempotent(transactions, existingSourceIds);
+        logger.info('Transactions persisted (idempotent)', {
+          created: result.created.length,
+          updated: result.updated.length,
+          skipped: result.skipped.length,
+        });
       }
 
       const response: CaptureResponse = {
@@ -116,9 +130,9 @@ app.http('nibo-capture', {
         cycleId,
         transactions: {
           total: payables.length + receivables.length,
-          new: storedIds.length,
-          updated: 0,
-          skipped: (payables.length + receivables.length) - storedIds.length,
+          new: result.created.length,
+          updated: result.updated.length,
+          skipped: result.skipped.length,
         },
         payables: payables.length,
         receivables: receivables.length,

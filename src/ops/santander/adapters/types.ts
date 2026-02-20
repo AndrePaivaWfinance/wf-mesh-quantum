@@ -209,7 +209,7 @@ export interface CaptureRequest {
   cycleId: string;
   startDate?: string;
   endDate?: string;
-  captureType?: 'dda' | 'statement' | 'pix' | 'boleto' | 'all';
+  captureType?: 'dda' | 'statement' | 'pix' | 'boleto' | 'comprovantes' | 'all';
   workspaceId?: string;
 }
 

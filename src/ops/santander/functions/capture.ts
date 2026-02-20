@@ -5,13 +5,19 @@
  */
 
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/functions';
+import * as crypto from 'crypto';
 import { getSantanderClient } from '../adapters/client';
-import { CaptureRequest, CaptureResponse, SantanderDDA, SantanderPIX, SantanderBoleto } from '../adapters/types';
+import { CaptureRequest, CaptureResponse, SantanderDDA, SantanderPIX, SantanderBoleto, SantanderComprovante } from '../adapters/types';
 import { createLogger, nowISO } from '../shared/utils';
-import { createTransactions } from '../../../storage/tableClient';
+import { getExistingSourceIds, upsertTransactionsIdempotent, updateTransaction } from '../../../storage/tableClient';
 import { Transaction, TransactionType, TransactionSource, TransactionStatus } from '../../../types';
 
 const logger = createLogger('SantanderCapture');
+
+/** Hash curto determinístico para IDs */
+function shortHash(input: string): string {
+  return crypto.createHash('sha256').update(input).digest('hex').substring(0, 16);
+}
 
 /** Parse Santander decimal: "1480,0" -> 1480.0 */
 function parseDecimal(val: unknown): number {
@@ -26,7 +32,7 @@ function ddaToTransaction(dda: SantanderDDA, clientId: string, cycleId: string):
   const nominal = parseDecimal(dda.nominalValue);
   const total = parseDecimal(dda.totalValue) || nominal;
   return {
-    id: `sant-dda-${barCode.substring(0, 15)}-${Date.now()}`,
+    id: `sant-dda-${shortHash(barCode)}`,
     clientId,
     type: TransactionType.PAGAR,
     status: TransactionStatus.CAPTURADO,
@@ -52,7 +58,7 @@ function ddaToTransaction(dda: SantanderDDA, clientId: string, cycleId: string):
 function pixToTransaction(pix: SantanderPIX, clientId: string, cycleId: string): Transaction {
   const isPagar = pix.type === 'debit' || pix.type === 'PAYMENT';
   return {
-    id: `sant-pix-${pix.id}-${Date.now()}`,
+    id: `sant-pix-${shortHash(pix.id)}`,
     clientId,
     type: isPagar ? TransactionType.PAGAR : TransactionType.RECEBER,
     status: TransactionStatus.CAPTURADO,
@@ -76,7 +82,7 @@ function pixToTransaction(pix: SantanderPIX, clientId: string, cycleId: string):
 
 function boletoToTransaction(boleto: SantanderBoleto, clientId: string, cycleId: string): Transaction {
   return {
-    id: `sant-boleto-${boleto.id}-${Date.now()}`,
+    id: `sant-boleto-${shortHash(boleto.id || boleto.barCode)}`,
     clientId,
     type: TransactionType.PAGAR,
     status: TransactionStatus.CAPTURADO,
@@ -89,7 +95,7 @@ function boletoToTransaction(boleto: SantanderBoleto, clientId: string, cycleId:
     contraparte: boleto.beneficiaryName,
     contraparteCnpj: boleto.beneficiaryDocument,
     codigoBarras: boleto.barCode,
-    sourceId: boleto.id,
+    sourceId: boleto.id || boleto.barCode,
     sourceName: 'santander',
     rawData: JSON.parse(JSON.stringify(boleto)),
     createdAt: nowISO(),
@@ -124,12 +130,16 @@ app.http('santander-capture', {
 
       const client = getSantanderClient();
 
+      // Buscar transações existentes para idempotência
+      const existingSourceIds = await getExistingSourceIds(clientId, 'santander');
+      logger.info('Existing Santander transactions', { count: existingSourceIds.size });
+
       const allTransactions: Transaction[] = [];
       let ddaCount = 0;
       let pixCount = 0;
       let boletosCount = 0;
-      let statementsCount = 0;
       let comprovantesCount = 0;
+      let comprovantesLinked = 0;
       const errors: string[] = [];
 
       // Capture DDA (if requested)
@@ -168,25 +178,108 @@ app.http('santander-capture', {
         }
       }
 
-      // Capture Comprovantes (if requested)
-      if (captureType === 'all') {
+      // Capture Comprovantes: persistir como transações + vincular a DDAs existentes
+      if (captureType === 'all' || captureType === 'comprovantes') {
         try {
           const comprovantes = await client.listComprovantes({ startDate: start, endDate: end });
           comprovantesCount = comprovantes.length;
           logger.info('Comprovantes captured', { count: comprovantesCount });
+
+          for (const comp of comprovantes) {
+            const paymentId = comp.paymentId || (comp as any).id;
+            if (!paymentId) continue;
+
+            // Tentar vincular a DDA existente por CNPJ + valor aproximado
+            const cnpj = comp.beneficiaryDocument?.replace(/\D/g, '');
+            let linkedTxId: string | null = null;
+
+            if (cnpj) {
+              for (const tx of allTransactions) {
+                const txCnpj = ((tx as any).contraparteCnpj || '').replace(/\D/g, '');
+                if (txCnpj === cnpj) {
+                  linkedTxId = tx.id;
+                  break;
+                }
+              }
+              // Também buscar nas existentes do storage
+              if (!linkedTxId) {
+                for (const [, existing] of existingSourceIds.entries()) {
+                  // Não temos CNPJ no map, mas podemos vincular pelo ID
+                  linkedTxId = existing.id;
+                  break;
+                }
+              }
+            }
+
+            // Persistir comprovante como transação
+            const compTx: Transaction = {
+              id: `sant-comp-${shortHash(paymentId)}`,
+              clientId,
+              type: TransactionType.PAGAR,
+              status: TransactionStatus.CAPTURADO,
+              source: TransactionSource.SANTANDER,
+              valor: comp.amount || 0,
+              valorOriginal: comp.amount || 0,
+              dataVencimento: comp.paymentDate,
+              descricao: `Comprovante - ${comp.beneficiaryName?.trim() || 'Pagamento'}`,
+              descricaoOriginal: `Comprovante ${comp.paymentType || ''} ${paymentId}`,
+              contraparte: comp.beneficiaryName?.trim(),
+              contraparteCnpj: cnpj,
+              sourceId: `comp-${paymentId}`,
+              sourceName: 'santander',
+              rawData: JSON.parse(JSON.stringify(comp)),
+              metadata: {
+                tipo: 'comprovante',
+                paymentId,
+                paymentType: comp.paymentType,
+                status: comp.status,
+                pdfAvailable: !!comp.pdfBase64,
+                downloadUrl: comp.downloadUrl,
+                linkedTransactionId: linkedTxId,
+              },
+              createdAt: nowISO(),
+              updatedAt: nowISO(),
+              capturedAt: nowISO(),
+            } as any;
+
+            allTransactions.push(compTx);
+
+            // Se vinculou a DDA, atualizar a DDA com referência ao comprovante
+            if (linkedTxId) {
+              try {
+                await updateTransaction(clientId, linkedTxId, {
+                  metadata: {
+                    comprovante: {
+                      paymentId,
+                      transactionId: compTx.id,
+                      status: comp.status,
+                      pdfAvailable: !!comp.pdfBase64,
+                    },
+                  },
+                } as any);
+                comprovantesLinked++;
+              } catch {
+                // OK - DDA pode não existir ainda se é da mesma captura
+              }
+            }
+          }
         } catch (error) {
           errors.push(`Comprovantes: ${String(error)}`);
         }
       }
 
-      // Persist to mesh storage
-      let storedIds: string[] = [];
+      // Persistir com idempotência
+      let result = { created: [] as string[], updated: [] as string[], skipped: [] as string[] };
       if (allTransactions.length > 0) {
-        storedIds = await createTransactions(allTransactions);
-        logger.info('Transactions stored in mesh', { stored: storedIds.length });
+        result = await upsertTransactionsIdempotent(allTransactions, existingSourceIds);
+        logger.info('Transactions persisted (idempotent)', {
+          created: result.created.length,
+          updated: result.updated.length,
+          skipped: result.skipped.length,
+        });
       }
 
-      const totalTransactions = ddaCount + pixCount + boletosCount + statementsCount;
+      const totalFromApi = ddaCount + pixCount + boletosCount;
 
       const response: CaptureResponse = {
         success: errors.length === 0,
@@ -195,19 +288,20 @@ app.http('santander-capture', {
         cycleId,
         workspaceId,
         transactions: {
-          total: totalTransactions,
-          new: storedIds.length,
-          updated: 0,
-          skipped: totalTransactions - storedIds.length,
+          total: totalFromApi,
+          new: result.created.length,
+          updated: result.updated.length,
+          skipped: result.skipped.length,
         },
         dda: ddaCount,
         pix: pixCount,
         boletos: boletosCount,
-        statements: statementsCount,
+        statements: 0,
         comprovantes: comprovantesCount,
+        comprovantesLinked,
         errors: errors.length > 0 ? errors : undefined,
         durationMs: Date.now() - startTime,
-      };
+      } as any;
 
       return { status: errors.length > 0 ? 207 : 200, jsonBody: response };
     } catch (error: unknown) {
