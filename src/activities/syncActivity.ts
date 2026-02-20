@@ -8,6 +8,14 @@
 import * as df from 'durable-functions';
 import { InvocationContext } from '@azure/functions';
 import { createLogger, withRetry } from '../../shared/utils';
+import { TransactionStatus } from '../types';
+import {
+  getTransactionsByStatus,
+  getTransaction as getTransactionFromStorage,
+  updateTransaction,
+  addHistoryAction,
+} from '../storage/tableClient';
+import { nowISO } from '../../shared/utils';
 
 const logger = createLogger('SyncActivity');
 
@@ -84,7 +92,7 @@ df.app.activity('syncBatchActivity', {
 
           // Update transaction with external ID if created
           if (result.externalId) {
-            await updateTransactionExternalId(tx.id, destination, result.externalId);
+            await updateTransactionExternalId(tx.id, destination, result.externalId, clientId);
           }
         } catch (error) {
           logger.error(`Error syncing transaction ${tx.id}`, error);
@@ -125,7 +133,7 @@ df.app.activity('syncActivity', {
 
     try {
       // Get transaction data
-      const transaction = await getTransaction(input.transactionId);
+      const transaction = await getTransaction(input.transactionId, input.clientId);
 
       if (!transaction) {
         return {
@@ -174,13 +182,22 @@ async function getTransactionsToSync(
   clientId: string,
   cycleId: string
 ): Promise<any[]> {
-  // TODO: Implement - get transactions with status CLASSIFICADO
-  return [];
+  try {
+    return await getTransactionsByStatus(clientId, TransactionStatus.CLASSIFICADO);
+  } catch (error) {
+    logger.error('Failed to get transactions to sync', error);
+    return [];
+  }
 }
 
-async function getTransaction(transactionId: string): Promise<any> {
-  // TODO: Implement - get single transaction
-  return null;
+async function getTransaction(transactionId: string, clientId?: string): Promise<any> {
+  if (!clientId) return null;
+  try {
+    return await getTransactionFromStorage(clientId, transactionId);
+  } catch (error) {
+    logger.error('Failed to get transaction', error);
+    return null;
+  }
 }
 
 async function syncTransaction(
@@ -235,12 +252,30 @@ async function syncTransaction(
 async function updateTransactionExternalId(
   transactionId: string,
   destination: 'nibo' | 'omie',
-  externalId: string
+  externalId: string,
+  clientId?: string
 ): Promise<void> {
-  // TODO: Implement - update transaction with external ID
-  logger.info('Updated transaction external ID', {
-    transactionId,
-    destination,
-    externalId,
-  });
+  try {
+    if (clientId) {
+      const updates: Record<string, any> = {
+        status: TransactionStatus.CONCILIADO,
+      };
+      if (destination === 'nibo') updates.niboId = externalId;
+      if (destination === 'omie') updates.omieId = externalId;
+
+      await updateTransaction(clientId, transactionId, updates);
+
+      await addHistoryAction({
+        id: `hist-sync-${transactionId}`,
+        clientId,
+        tipo: 'sync',
+        descricao: `Transação sincronizada para ${destination}: ${externalId}`,
+        data: nowISO(),
+        detalhes: { transactionId, destination, externalId },
+      });
+    }
+    logger.info('Updated transaction external ID', { transactionId, destination, externalId });
+  } catch (error) {
+    logger.error('Failed to update transaction external ID', error);
+  }
 }

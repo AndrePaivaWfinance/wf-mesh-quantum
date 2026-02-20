@@ -8,9 +8,14 @@
 import * as df from 'durable-functions';
 import { InvocationContext } from '@azure/functions';
 import OpenAI from 'openai';
-import { createLogger } from '../../shared/utils';
-import { TransactionType, TransactionStatus } from '../types';
+import { createLogger, nowISO } from '../../shared/utils';
+import { TransactionType, TransactionStatus, DoubtType } from '../types';
 import { getOpenAIClient as getAIClient, DEFAULT_MODEL } from '../ai/openaiClient';
+import {
+  getTransactionsByStatus,
+  updateTransaction,
+  createDoubt as createDoubtRecord,
+} from '../storage/tableClient';
 
 const logger = createLogger('ClassifyActivity');
 
@@ -63,11 +68,11 @@ df.app.activity('classifyBatchActivity', {
 
           if (result.confidence >= 0.8) {
             // Auto-classify
-            await updateTransactionCategory(tx.id, result.categoryId, result.categoryName);
+            await updateTransactionCategory(tx.id, result.categoryId, result.categoryName, clientId);
             classified++;
           } else {
             // Send to review
-            await createDoubt(tx, result);
+            await createDoubtForReview(tx, result, clientId);
             needsReview++;
           }
         } catch (error) {
@@ -153,9 +158,19 @@ async function getUnclassifiedTransactions(
   clientId: string,
   cycleId: string
 ): Promise<any[]> {
-  // TODO: Implement - get from transactions table
-  // Filter by clientId, cycleId, status = CAPTURADO
-  return [];
+  try {
+    const txs = await getTransactionsByStatus(clientId, TransactionStatus.CAPTURADO);
+    return txs.map(tx => ({
+      id: tx.id,
+      descricao: tx.descricao,
+      valor: tx.valor,
+      tipo: tx.type === TransactionType.PAGAR ? 'pagar' : 'receber',
+      contraparte: tx.contraparte,
+    }));
+  } catch (error) {
+    logger.error('Failed to get unclassified transactions', error);
+    return [];
+  }
 }
 
 async function getClientCategories(clientId: string): Promise<any[]> {
@@ -238,21 +253,52 @@ Responda APENAS em JSON com o formato:
 async function updateTransactionCategory(
   transactionId: string,
   categoryId: string,
-  categoryName: string
+  categoryName: string,
+  clientId?: string
 ): Promise<void> {
-  // TODO: Implement - update transaction in storage
-  logger.info('Updated transaction category', {
-    transactionId,
-    categoryId,
-    categoryName,
-  });
+  try {
+    // We need clientId for the PK; if not provided, try a best-effort update
+    if (clientId) {
+      await updateTransaction(clientId, transactionId, {
+        categoriaId: categoryId,
+        categoriaNome: categoryName,
+        status: TransactionStatus.CLASSIFICADO,
+      });
+    }
+    logger.info('Updated transaction category', { transactionId, categoryId, categoryName });
+  } catch (error) {
+    logger.error('Failed to update transaction category', error);
+  }
 }
 
-async function createDoubt(transaction: any, classification: any): Promise<void> {
-  // TODO: Implement - create doubt in storage for human review
-  logger.info('Created doubt for review', {
-    transactionId: transaction.id,
-    suggestedCategory: classification.categoryName,
-    confidence: classification.confidence,
-  });
+async function createDoubtForReview(transaction: any, classification: any, clientId?: string): Promise<void> {
+  try {
+    await createDoubtRecord({
+      id: `doubt-cls-${transaction.id}`,
+      clientId: clientId || 'unknown',
+      transactionId: transaction.id,
+      tipo: DoubtType.CLASSIFICACAO,
+      transacao: {
+        id: transaction.id,
+        descricao: transaction.descricao,
+        valor: transaction.valor,
+        data: nowISO().split('T')[0],
+      },
+      sugestaoIA: {
+        categoria: classification.categoryName,
+        categoriaId: classification.categoryId,
+        confianca: classification.confidence,
+      },
+      opcoes: [],
+      status: 'pendente',
+      criadoEm: nowISO(),
+    });
+    logger.info('Created doubt for review', {
+      transactionId: transaction.id,
+      suggestedCategory: classification.categoryName,
+      confidence: classification.confidence,
+    });
+  } catch (error) {
+    logger.error('Failed to create doubt', error);
+  }
 }

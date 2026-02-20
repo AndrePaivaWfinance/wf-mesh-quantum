@@ -4,7 +4,16 @@ import { AdvancedClassifier } from "../ai/advancedClassifier";
 import { AnomalyDetector } from "../ai/anomalyDetector";
 import { SmartMatcher } from "../ai/smartMatcher";
 import { DecisionEngine } from "../ai/decisionEngine";
-import { Transaction, ClassificationResult, Anomaly, Decision } from "../../shared/types"; // Corrected import path (3 levels up)
+import { Transaction, TransactionStatus, TransactionType, DoubtType, ClassificationResult, Anomaly, Decision } from "../../shared/types";
+import {
+    getTransactionsByStatus,
+    getTransactionHistory,
+    updateTransaction,
+    createAuthorization,
+    createDoubt,
+    addHistoryAction,
+} from "../storage/tableClient";
+import { nowISO } from "../../shared/utils";
 
 interface AIProcessingInput {
     clientId: string;
@@ -34,9 +43,22 @@ export async function aiProcessingActivity(input: AIProcessingInput, context: In
     const matcher = new SmartMatcher();
     const decisionEngine = new DecisionEngine();
 
-    // 2. Flatten Transactions from Capture Results
+    // 2. Get transactions from storage (CAPTURADO status) + flatten capture results
     let allTransactions: Transaction[] = [];
-    if (captureResults && Array.isArray(captureResults)) {
+
+    // Load persisted transactions from Table Storage
+    try {
+        const storedTxs = await getTransactionsByStatus(clientId, TransactionStatus.CAPTURADO);
+        if (storedTxs.length > 0) {
+            allTransactions = storedTxs;
+            context.log(`[AI Pipeline] Loaded ${storedTxs.length} CAPTURADO transactions from storage`);
+        }
+    } catch (err: any) {
+        context.log(`[AI Pipeline] Could not load from storage: ${err.message}`);
+    }
+
+    // Also include any inline capture results
+    if (allTransactions.length === 0 && captureResults && Array.isArray(captureResults)) {
         for (const res of captureResults) {
             if (res && res.transactions && Array.isArray(res.transactions)) {
                 allTransactions = allTransactions.concat(res.transactions);
@@ -46,11 +68,16 @@ export async function aiProcessingActivity(input: AIProcessingInput, context: In
 
     context.log(`[AI Pipeline] Processing ${allTransactions.length} transactions for client ${clientId}`);
 
-    // 3. Process Pipeline
+    // 3. Load history from Table Storage for anomaly detection & matching
     const results = [];
     const syncCandidates: Transaction[] = [];
-    // TODO: Load history from Table Storage for real context
-    const history: Transaction[] = [];
+    let history: Transaction[] = [];
+    try {
+        history = await getTransactionHistory(clientId, 100);
+        context.log(`[AI Pipeline] Loaded ${history.length} historical transactions`);
+    } catch (err: any) {
+        context.log(`[AI Pipeline] Could not load history: ${err.message}`);
+    }
 
     for (const tx of allTransactions) {
         try {
@@ -67,46 +94,156 @@ export async function aiProcessingActivity(input: AIProcessingInput, context: In
             // D. Decide
             const decision = decisionEngine.decide(tx, classification, anomalies, matchResult);
 
-            // Apply Decision Logic
-            // If Auto-Categorize or Auto-Sync, we update the transaction
+            // Apply Decision Logic & Persist to Storage
             if (decision.acao === 'categorizar_auto' || decision.acao === 'sync_auto') {
                 tx.categoriaNome = classification.categoria;
-                // Add metadata about the automatic decision
+                tx.categoriaConfianca = classification.confianca;
+                tx.status = TransactionStatus.CLASSIFICADO;
                 tx.metadata = {
                     ...tx.metadata,
                     aiDecision: decision.acao,
-                    confidence: decision.confianca
+                    confidence: decision.confianca,
                 };
 
-                // Only push to sync candidates if action is explicitly sync_auto
-                // Or if we want to sync all categorized... let's stick to Decision Engine logic
+                // Persist classification to storage
+                try {
+                    await updateTransaction(clientId, tx.id, {
+                        status: TransactionStatus.CLASSIFICADO,
+                        categoriaNome: classification.categoria,
+                        categoriaConfianca: classification.confianca,
+                        processedAt: nowISO(),
+                        metadata: tx.metadata,
+                    });
+                } catch (e: any) {
+                    context.log(`[AI Pipeline] Could not update tx ${tx.id}: ${e.message}`);
+                }
+
                 if (decision.acao === 'sync_auto') {
                     syncCandidates.push(tx);
                 }
-            } else {
-                // Determine status based on decision
-                // e.g., 'escalar' -> needs review
+            } else if (decision.acao === 'escalar') {
+                tx.status = TransactionStatus.REVISAO_PENDENTE;
                 tx.metadata = {
                     ...tx.metadata,
                     aiDecision: decision.acao,
                     reviewReason: decision.razao,
-                    anomalies
+                    anomalies,
                 };
+
+                // Persist status update
+                try {
+                    await updateTransaction(clientId, tx.id, {
+                        status: TransactionStatus.REVISAO_PENDENTE,
+                        categoriaNome: classification.categoria,
+                        categoriaConfianca: classification.confianca,
+                        processedAt: nowISO(),
+                        metadata: tx.metadata,
+                    });
+                } catch (e: any) {
+                    context.log(`[AI Pipeline] Could not update tx ${tx.id}: ${e.message}`);
+                }
+
+                // Create authorization for high-value escalated items
+                try {
+                    await createAuthorization({
+                        id: `auth-${tx.id}`,
+                        clientId,
+                        transactionId: tx.id,
+                        tipo: tx.type === TransactionType.PAGAR ? 'pagar' : 'receber',
+                        descricao: tx.descricao,
+                        valor: tx.valor,
+                        vencimento: tx.dataVencimento || nowISO().split('T')[0],
+                        contraparte: tx.contraparte || 'Desconhecido',
+                        categoria: classification.categoria,
+                        status: 'pendente',
+                        criadoEm: nowISO(),
+                    });
+                } catch (e: any) {
+                    context.log(`[AI Pipeline] Could not create auth for ${tx.id}: ${e.message}`);
+                }
+            } else {
+                // aguardar, rejeitar, etc
+                tx.metadata = {
+                    ...tx.metadata,
+                    aiDecision: decision.acao,
+                    reviewReason: decision.razao,
+                    anomalies,
+                };
+
+                try {
+                    await updateTransaction(clientId, tx.id, {
+                        status: TransactionStatus.PROCESSANDO,
+                        categoriaNome: classification.categoria,
+                        categoriaConfianca: classification.confianca,
+                        processedAt: nowISO(),
+                        metadata: tx.metadata,
+                    });
+                } catch (e: any) {
+                    context.log(`[AI Pipeline] Could not update tx ${tx.id}: ${e.message}`);
+                }
+            }
+
+            // Create doubt for low-confidence classifications
+            if (classification.confianca < 0.8 && decision.acao !== 'sync_auto') {
+                try {
+                    await createDoubt({
+                        id: `doubt-${tx.id}`,
+                        clientId,
+                        transactionId: tx.id,
+                        tipo: DoubtType.CLASSIFICACAO,
+                        transacao: {
+                            id: tx.id,
+                            descricao: tx.descricao,
+                            valor: tx.valor,
+                            data: tx.dataVencimento || nowISO().split('T')[0],
+                        },
+                        sugestaoIA: {
+                            categoria: classification.categoria,
+                            confianca: classification.confianca,
+                        },
+                        opcoes: classification.alternativas?.map((a, i) => ({
+                            id: `alt-${i}`,
+                            nome: a.categoria,
+                        })) || [],
+                        status: 'pendente',
+                        criadoEm: nowISO(),
+                    });
+                } catch (e: any) {
+                    context.log(`[AI Pipeline] Could not create doubt for ${tx.id}: ${e.message}`);
+                }
             }
 
             results.push({
                 transactionId: tx.id,
                 classification,
                 anomalies,
-                decision
+                decision,
             });
         } catch (err: any) {
             context.log(`[AI Pipeline][Error] Processing transaction ${tx.id}: ${err.message}`);
             results.push({
                 transactionId: tx.id,
-                error: err.message
+                error: err.message,
             });
         }
+    }
+
+    // Log history action for this processing
+    try {
+        await addHistoryAction({
+            id: `hist-ai-${input.cycleId}-${clientId}`,
+            clientId,
+            tipo: 'classificacao',
+            descricao: `Pipeline IA processou ${allTransactions.length} transações: ${syncCandidates.length} auto-sync, ${results.filter(r => r.decision?.acao === 'escalar').length} escaladas`,
+            data: nowISO(),
+            detalhes: {
+                cycleId: input.cycleId,
+                processed: allTransactions.length,
+                syncCandidates: syncCandidates.length,
+            },
+        });
+    } catch (e: any) {
+        context.log(`[AI Pipeline] Could not log history: ${e.message}`);
     }
 
     return {

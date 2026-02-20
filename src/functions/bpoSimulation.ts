@@ -12,8 +12,10 @@ import {
     getPendingAuthorizations,
     getPendingDoubts,
     getCyclesByDate,
-    upsertClient
+    upsertClient,
+    createTransactions,
 } from '../storage/tableClient';
+import { createTransaction, TransactionType, TransactionSource, TransactionStatus } from '../../shared/types';
 import { createLogger, nowISO } from '../../shared/utils';
 
 const logger = createLogger('BPOSimulation');
@@ -84,13 +86,45 @@ app.http('bpoSimulate', {
                 transactions = generateMockTransactions();
             }
 
+            // Persist transactions to storage
+            const storedTransactions = transactions.map((t: any) => {
+                const txType = (t.type === 'saida' || t.valor < 0)
+                    ? TransactionType.PAGAR
+                    : TransactionType.RECEBER;
+                return createTransaction(
+                    clientId,
+                    txType,
+                    TransactionSource.MANUAL,
+                    {
+                        descricao: t.descricao,
+                        descricaoOriginal: t.descricao,
+                        valor: Math.abs(t.valor),
+                        dataVencimento: t.data || nowISO().split('T')[0],
+                        dataRealizacao: t.data || nowISO().split('T')[0],
+                        status: TransactionStatus.CAPTURADO,
+                        sourceName: 'simulacao',
+                    }
+                );
+            });
+
+            const savedIds = await createTransactions(storedTransactions);
+            logger.info(`Stored ${savedIds.length} transactions in Table Storage`);
+
             return {
                 status: 200,
                 jsonBody: {
                     message: 'Simulação gerada com sucesso',
                     clientId,
                     source: isOpenAIConfigured() ? 'openai' : 'mock',
-                    data: transactions
+                    transactionsStored: savedIds.length,
+                    transactionIds: savedIds,
+                    data: storedTransactions.map(t => ({
+                        id: t.id,
+                        descricao: t.descricao,
+                        valor: t.valor,
+                        type: t.type,
+                        status: t.status,
+                    })),
                 }
             };
 

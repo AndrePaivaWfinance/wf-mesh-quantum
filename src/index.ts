@@ -19,6 +19,7 @@ import './functions/bpoFilas';
 import './functions/bpoCycle';
 import './functions/bpoClientes';
 import './functions/bpoSimulation';
+import './functions/bpoTransactions';
 
 // Triggers
 import './triggers/dailyTrigger';
