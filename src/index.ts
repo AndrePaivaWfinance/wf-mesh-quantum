@@ -44,6 +44,7 @@ import './functions/bpoMetrics';
 import './ops/nibo/index';
 import './ops/santander/index';
 import './ops/inter/index';
+import './ops/omie/index';
 
 // Ensure storage tables exist on startup
 import { ensureAllTables } from './storage/tableClient';
