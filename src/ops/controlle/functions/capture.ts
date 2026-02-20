@@ -5,10 +5,11 @@
  */
 
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/functions';
+import * as crypto from 'crypto';
 import { getControlleClient } from '../adapters/client';
 import { CaptureRequest, CaptureResponse, ControllePayable, ControlleReceivable } from '../adapters/types';
 import { createLogger } from '../shared/utils';
-import { createTransactions } from '../../../storage/tableClient';
+import { getExistingSourceIds, upsertTransactionsIdempotent } from '../../../storage/tableClient';
 import { Transaction, TransactionType, TransactionSource, TransactionStatus } from '../../../types';
 
 const logger = createLogger('ControlleCapture');
@@ -17,9 +18,13 @@ function nowISO(): string {
   return new Date().toISOString();
 }
 
+function shortHash(input: string): string {
+  return crypto.createHash('sha256').update(input).digest('hex').substring(0, 16);
+}
+
 function payableToTransaction(p: ControllePayable, clientId: string, cycleId: string): Transaction {
   return {
-    id: `ctrl-pagar-${p.id}-${Date.now()}`,
+    id: `ctrl-pagar-${shortHash(p.id)}`,
     clientId,
     type: TransactionType.PAGAR,
     status: TransactionStatus.CAPTURADO,
@@ -44,7 +49,7 @@ function payableToTransaction(p: ControllePayable, clientId: string, cycleId: st
 
 function receivableToTransaction(r: ControlleReceivable, clientId: string, cycleId: string): Transaction {
   return {
-    id: `ctrl-receber-${r.id}-${Date.now()}`,
+    id: `ctrl-receber-${shortHash(r.id)}`,
     clientId,
     type: TransactionType.RECEBER,
     status: TransactionStatus.CAPTURADO,
@@ -90,6 +95,10 @@ app.http('controlle-capture', {
 
       const client = getControlleClient();
 
+      // Buscar transações existentes para idempotência
+      const existingSourceIds = await getExistingSourceIds(clientId, 'controlle');
+      logger.info('Existing Controlle transactions', { count: existingSourceIds.size });
+
       // Capture payables and receivables in parallel
       const [payables, receivables] = await Promise.all([
         client.getPayables(start, end),
@@ -101,16 +110,21 @@ app.http('controlle-capture', {
         receivables: receivables.length,
       });
 
-      // Convert to mesh Transaction format and persist
+      // Convert to mesh Transaction format
       const transactions: Transaction[] = [
         ...payables.map(p => payableToTransaction(p, clientId, cycleId)),
         ...receivables.map(r => receivableToTransaction(r, clientId, cycleId)),
       ];
 
-      let storedIds: string[] = [];
+      // Persistir com idempotência
+      let result = { created: [] as string[], updated: [] as string[], skipped: [] as string[] };
       if (transactions.length > 0) {
-        storedIds = await createTransactions(transactions);
-        logger.info('Transactions stored in mesh', { stored: storedIds.length });
+        result = await upsertTransactionsIdempotent(transactions, existingSourceIds);
+        logger.info('Transactions persisted (idempotent)', {
+          created: result.created.length,
+          updated: result.updated.length,
+          skipped: result.skipped.length,
+        });
       }
 
       const response: CaptureResponse = {
@@ -120,9 +134,9 @@ app.http('controlle-capture', {
         cycleId,
         transactions: {
           total: payables.length + receivables.length,
-          new: storedIds.length,
-          updated: 0,
-          skipped: (payables.length + receivables.length) - storedIds.length,
+          new: result.created.length,
+          updated: result.updated.length,
+          skipped: result.skipped.length,
         },
         payables: payables.length,
         receivables: receivables.length,

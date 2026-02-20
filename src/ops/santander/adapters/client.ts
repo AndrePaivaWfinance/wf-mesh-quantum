@@ -136,6 +136,78 @@ export class SantanderClient {
   }
 
   // ============================================================================
+  // HTTP FETCH WITH mTLS SUPPORT
+  // ============================================================================
+
+  /**
+   * Wrapper around HTTP requests that supports mTLS via https.Agent.
+   * Node.js global fetch() does NOT support https.Agent, so we use
+   * https.request when mTLS certificates are configured.
+   */
+  private httpFetch(
+    url: string,
+    options: { method: string; headers: Record<string, string>; body?: string }
+  ): Promise<{
+    ok: boolean;
+    status: number;
+    headers: { get(name: string): string | null };
+    text(): Promise<string>;
+    json(): Promise<unknown>;
+    arrayBuffer(): Promise<ArrayBuffer>;
+  }> {
+    if (!this.httpsAgent) {
+      // No mTLS needed, use global fetch
+      return fetch(url, options) as any;
+    }
+
+    // Use https.request for mTLS
+    return new Promise((resolve, reject) => {
+      const parsed = new URL(url);
+      const req = https.request(
+        {
+          hostname: parsed.hostname,
+          port: parsed.port ? Number(parsed.port) : 443,
+          path: parsed.pathname + parsed.search,
+          method: options.method,
+          headers: options.headers,
+          agent: this.httpsAgent,
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (chunk: Buffer) => chunks.push(chunk));
+          res.on('end', () => {
+            const rawData = Buffer.concat(chunks);
+            const textData = rawData.toString('utf-8');
+            const statusCode = res.statusCode || 500;
+
+            resolve({
+              ok: statusCode >= 200 && statusCode < 300,
+              status: statusCode,
+              headers: {
+                get(name: string): string | null {
+                  const val = res.headers[name.toLowerCase()];
+                  return Array.isArray(val) ? val[0] : val || null;
+                },
+              },
+              text: async () => textData,
+              json: async () => JSON.parse(textData),
+              arrayBuffer: async () =>
+                rawData.buffer.slice(
+                  rawData.byteOffset,
+                  rawData.byteOffset + rawData.byteLength
+                ),
+            });
+          });
+        }
+      );
+
+      req.on('error', reject);
+      if (options.body) req.write(options.body);
+      req.end();
+    });
+  }
+
+  // ============================================================================
   // AUTHENTICATION
   // ============================================================================
 
@@ -161,16 +233,14 @@ export class SantanderClient {
         client_secret: this.config.clientSecret,
       });
 
-      const fetchOptions: RequestInit = {
+      // Use httpFetch for mTLS support
+      const response = await this.httpFetch(this.authUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
         },
         body: body.toString(),
-      };
-
-      // Node.js fetch com HTTPS agent para mTLS
-      const response = await fetch(this.authUrl, fetchOptions);
+      });
 
       if (!response.ok) {
         const error = await response.text();
@@ -234,7 +304,8 @@ export class SantanderClient {
 
     return withRetry(
       async () => {
-        const res = await fetch(url, {
+        // Use httpFetch for mTLS support
+        const res = await this.httpFetch(url, {
           method,
           headers,
           body: body ? JSON.stringify(body) : undefined,
@@ -520,36 +591,115 @@ export class SantanderClient {
   // ============================================================================
 
   async listComprovantes(params?: ComprovanteListParams): Promise<SantanderComprovante[]> {
-    logger.info('Listing comprovantes');
+    logger.info('Listing comprovantes', { params });
 
-    // Defaults para datas (últimos 7 dias)
     const today = new Date();
     const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
 
+    const startDate = params?.startDate || weekAgo.toISOString().split('T')[0];
+    const endDate = params?.endDate || today.toISOString().split('T')[0];
+
+    // Santander API has a 30-day limit. Split into chunks if needed.
+    const startMs = new Date(startDate).getTime();
+    const endMs = new Date(endDate).getTime();
+    const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+
+    if (endMs - startMs > thirtyDaysMs) {
+      const allComprovantes: SantanderComprovante[] = [];
+      let chunkStart = startMs;
+      while (chunkStart < endMs) {
+        const chunkEnd = Math.min(chunkStart + thirtyDaysMs, endMs);
+        const chunkStartStr = new Date(chunkStart).toISOString().split('T')[0];
+        const chunkEndStr = new Date(chunkEnd).toISOString().split('T')[0];
+        logger.info('Fetching comprovantes chunk', { chunkStartStr, chunkEndStr });
+        const chunk = await this.fetchComprovantesPage(chunkStartStr, chunkEndStr, params);
+        allComprovantes.push(...chunk);
+        chunkStart = chunkEnd + 24 * 60 * 60 * 1000; // next day
+      }
+      return allComprovantes;
+    }
+
+    return this.fetchComprovantesPage(startDate, endDate, params);
+  }
+
+  private async fetchComprovantesPage(
+    startDate: string,
+    endDate: string,
+    params?: ComprovanteListParams
+  ): Promise<SantanderComprovante[]> {
     const queryParams: Record<string, string | number | undefined> = {
-      start_date: params?.startDate || weekAgo.toISOString().split('T')[0],
-      end_date: params?.endDate || today.toISOString().split('T')[0],
+      start_date: startDate,
+      end_date: endDate,
       payment_type: params?.paymentType,
       beneficiary_document: params?.beneficiaryDocument,
       category: params?.category,
       account_agency: params?.accountAgency,
       account_number: params?.accountNumber,
-      _limit: params?._limit,
+      _limit: params?._limit || 100,
       _offset: params?._offset,
     };
 
-    try {
-      const response = await this.request<SantanderApiResponse<SantanderComprovante>>(
-        '/consult_payment_receipts/v1/payment_receipts',
-        'GET',
-        queryParams
-      );
+    const token = await this.getToken();
+    let url = `${this.baseUrl}/consult_payment_receipts/v1/payment_receipts`;
+    const searchParams = new URLSearchParams();
+    Object.entries(queryParams).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        searchParams.append(key, String(value));
+      }
+    });
+    const qs = searchParams.toString();
+    if (qs) url += `?${qs}`;
 
-      return this.extractContent(response);
-    } catch (error) {
-      logger.error('Failed to list comprovantes', error);
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'X-Application-Key': this.config.clientId,
+    };
+
+    if (this.config.workspaceId) {
+      headers['X-Workspace-Id'] = this.config.workspaceId;
+    }
+
+    const res = await this.httpFetch(url, { method: 'GET', headers });
+    const text = await res.text();
+
+    if (!res.ok) {
+      throw new Error(`Comprovantes API error ${res.status}: ${text.substring(0, 300)}`);
+    }
+
+    try {
+      const parsed = JSON.parse(text);
+
+      // Santander returns 'paymentsReceipts' array with nested structure
+      const rawReceipts = parsed.paymentsReceipts || parsed.paymentReceipts || parsed.payment_receipts || [];
+
+      if (Array.isArray(rawReceipts) && rawReceipts.length > 0) {
+        return rawReceipts.map((item: any) => this.mapComprovante(item));
+      }
+
+      // Fallback: try extractContent
+      const extracted = this.extractContent(parsed);
+      if (extracted.length > 0) return extracted;
+
+      return [];
+    } catch {
       return [];
     }
+  }
+
+  private mapComprovante(item: any): SantanderComprovante {
+    const payment = item.payment || {};
+    const payee = payment.payee || {};
+    const amountInfo = payment.paymentAmountInfo?.direct || payment.paymentAmountInfo || {};
+    return {
+      paymentId: payment.paymentId || item.id,
+      paymentType: item.category?.code || item.paymentType,
+      beneficiaryName: payee.name || payee.beneficiaryName,
+      beneficiaryDocument: payee.person?.document?.documentNumber || payee.document,
+      amount: parseFloat(amountInfo.amount || '0') || 0,
+      paymentDate: payment.requestValueDate?.split('T')[0] || payment.paymentDate,
+      status: payment.status || item.status || 'COMPLETED',
+    } as SantanderComprovante;
   }
 
   async requestComprovante(paymentId: string): Promise<{ requestId: string } | null> {

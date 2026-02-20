@@ -5,17 +5,22 @@
  */
 
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/functions';
+import * as crypto from 'crypto';
 import { getInterClient } from '../adapters/client';
 import { CaptureRequest, CaptureResponse, InterDDA, InterPIX, InterBoleto } from '../adapters/types';
 import { createLogger, nowISO } from '../shared/utils';
-import { createTransactions } from '../../../storage/tableClient';
+import { getExistingSourceIds, upsertTransactionsIdempotent } from '../../../storage/tableClient';
 import { Transaction, TransactionType, TransactionSource, TransactionStatus } from '../../../types';
 
 const logger = createLogger('InterCapture');
 
+function shortHash(input: string): string {
+  return crypto.createHash('sha256').update(input).digest('hex').substring(0, 16);
+}
+
 function ddaToTransaction(dda: InterDDA, clientId: string, cycleId: string): Transaction {
   return {
-    id: `inter-dda-${dda.codigoBarras.substring(0, 15)}-${Date.now()}`,
+    id: `inter-dda-${shortHash(dda.codigoBarras)}`,
     clientId,
     type: TransactionType.PAGAR,
     status: TransactionStatus.CAPTURADO,
@@ -41,7 +46,7 @@ function ddaToTransaction(dda: InterDDA, clientId: string, cycleId: string): Tra
 function pixToTransaction(pix: InterPIX, clientId: string, cycleId: string): Transaction {
   const isPagar = pix.natureza === 'PAGAMENTO';
   return {
-    id: `inter-pix-${pix.endToEndId || pix.txid || Date.now()}-${Date.now()}`,
+    id: `inter-pix-${shortHash(pix.endToEndId || pix.txid || String(Date.now()))}`,
     clientId,
     type: isPagar ? TransactionType.PAGAR : TransactionType.RECEBER,
     status: TransactionStatus.CAPTURADO,
@@ -65,7 +70,7 @@ function pixToTransaction(pix: InterPIX, clientId: string, cycleId: string): Tra
 
 function boletoToTransaction(boleto: InterBoleto, clientId: string, cycleId: string): Transaction {
   return {
-    id: `inter-boleto-${boleto.nossoNumero}-${Date.now()}`,
+    id: `inter-boleto-${shortHash(boleto.nossoNumero)}`,
     clientId,
     type: TransactionType.RECEBER,
     status: TransactionStatus.CAPTURADO,
@@ -113,6 +118,10 @@ app.http('inter-capture', {
         })();
 
       const client = getInterClient();
+
+      // Buscar transações existentes para idempotência
+      const existingSourceIds = await getExistingSourceIds(clientId, 'inter');
+      logger.info('Existing Inter transactions', { count: existingSourceIds.size });
 
       const allTransactions: Transaction[] = [];
       let ddaCount = 0;
@@ -180,11 +189,15 @@ app.http('inter-capture', {
         }
       }
 
-      // Persist to mesh storage
-      let storedIds: string[] = [];
+      // Persistir com idempotência
+      let result = { created: [] as string[], updated: [] as string[], skipped: [] as string[] };
       if (allTransactions.length > 0) {
-        storedIds = await createTransactions(allTransactions);
-        logger.info('Transactions stored in mesh', { stored: storedIds.length });
+        result = await upsertTransactionsIdempotent(allTransactions, existingSourceIds);
+        logger.info('Transactions persisted (idempotent)', {
+          created: result.created.length,
+          updated: result.updated.length,
+          skipped: result.skipped.length,
+        });
       }
 
       const totalTransactions = ddaCount + pixCount + boletosCount + extratoCount;
@@ -196,9 +209,9 @@ app.http('inter-capture', {
         cycleId,
         transactions: {
           total: totalTransactions,
-          new: storedIds.length,
-          updated: 0,
-          skipped: totalTransactions - storedIds.length,
+          new: result.created.length,
+          updated: result.updated.length,
+          skipped: result.skipped.length,
         },
         dda: ddaCount,
         pix: pixCount,

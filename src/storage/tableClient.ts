@@ -405,6 +405,108 @@ export async function createTransactions(
   return ids;
 }
 
+/** Buscar transações existentes por source (para idempotência) */
+export async function getExistingSourceIds(
+  clientId: string,
+  source: string
+): Promise<Map<string, { id: string; status: string }>> {
+  const client = getTableClient(TABLES.TRANSACTIONS);
+  const existing = new Map<string, { id: string; status: string }>();
+
+  try {
+    const entities = client.listEntities<TableEntity>({
+      queryOptions: {
+        filter: `PartitionKey eq '${clientId}' and source eq '${source}'`,
+        select: ['RowKey', 'sourceId', 'status'],
+      },
+    });
+
+    for await (const entity of entities) {
+      const sourceId = entity.sourceId as string;
+      if (sourceId) {
+        existing.set(sourceId, {
+          id: entity.rowKey as string,
+          status: entity.status as string,
+        });
+      }
+    }
+  } catch (error) {
+    logger.error('Erro ao buscar sourceIds existentes', error);
+  }
+
+  return existing;
+}
+
+/**
+ * Criar transações com idempotência.
+ * - Novas: cria normalmente
+ * - Existentes com status 'capturado': atualiza rawData + updatedAt
+ * - Existentes com status avançado: skip (preserva classificação/sync)
+ *
+ * Retorna { created, updated, skipped }
+ */
+export async function upsertTransactionsIdempotent(
+  transactions: Transaction[],
+  existingSourceIds: Map<string, { id: string; status: string }>
+): Promise<{ created: string[]; updated: string[]; skipped: string[] }> {
+  const client = getTableClient(TABLES.TRANSACTIONS);
+  const created: string[] = [];
+  const updated: string[] = [];
+  const skipped: string[] = [];
+
+  for (const tx of transactions) {
+    const sourceId = (tx as any).sourceId as string;
+    const existing = sourceId ? existingSourceIds.get(sourceId) : undefined;
+
+    if (existing) {
+      if (existing.status === TransactionStatus.CAPTURADO) {
+        // Ainda não classificado: atualizar rawData e valores
+        try {
+          await client.updateEntity(
+            {
+              partitionKey: tx.clientId,
+              rowKey: existing.id,
+              rawData: JSON.stringify((tx as any).rawData),
+              valor: tx.valor,
+              valorOriginal: (tx as any).valorOriginal,
+              dataVencimento: (tx as any).dataVencimento,
+              updatedAt: nowISO(),
+            },
+            'Merge'
+          );
+          updated.push(existing.id);
+        } catch (error) {
+          logger.error(`Erro ao atualizar transação ${existing.id}`, error);
+        }
+      } else {
+        // Já classificado/sincronizado: preservar
+        skipped.push(existing.id);
+      }
+    } else {
+      // Nova transação
+      const entity: TableEntity = {
+        partitionKey: tx.clientId,
+        rowKey: tx.id,
+        ...transactionToEntity(tx),
+      };
+
+      try {
+        await client.createEntity(entity);
+        created.push(tx.id);
+      } catch (error: any) {
+        if (error.statusCode === 409) {
+          // Race condition: criada entre a query e o insert
+          skipped.push(tx.id);
+        } else {
+          logger.error(`Erro ao criar transação ${tx.id}`, error);
+        }
+      }
+    }
+  }
+
+  return { created, updated, skipped };
+}
+
 /** Buscar transação por ID */
 export async function getTransaction(
   clientId: string,
