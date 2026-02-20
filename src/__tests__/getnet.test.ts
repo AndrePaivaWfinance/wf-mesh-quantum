@@ -35,7 +35,11 @@ jest.mock('@azure/storage-queue', () => ({
 }));
 
 jest.mock('@azure/identity', () => ({ DefaultAzureCredential: jest.fn() }));
-jest.mock('@azure/keyvault-secrets', () => ({ SecretClient: jest.fn() }));
+jest.mock('@azure/keyvault-secrets', () => ({
+  SecretClient: jest.fn(() => ({
+    getSecret: jest.fn().mockResolvedValue({ value: 'mock-pass' }),
+  })),
+}));
 
 jest.mock('durable-functions', () => ({
   input: { durableClient: jest.fn(() => ({ type: 'durableClient' })) },
@@ -902,9 +906,8 @@ describe('Getnet Health', () => {
     expect(registeredRoutes['getnet-health'].route).toBe('getnet/health');
   });
 
-  test('returns healthy when env vars are set', async () => {
+  test('returns healthy when user env var set and KV has password', async () => {
     process.env.GETNET_USER = 'test-user';
-    process.env.GETNET_PASS = 'test-pass';
 
     const handler = registeredRoutes['getnet-health'].handler;
     const result = await handler({}, {});
@@ -912,12 +915,13 @@ describe('Getnet Health', () => {
     expect(result.status).toBe(200);
     expect(result.jsonBody.status).toBe('healthy');
     expect(result.jsonBody.sftp).toBe('configured');
-    expect(result.jsonBody.host).toBe('sftp1.getnet.com.br');
+    expect(result.jsonBody.host).toBe('getsftp2.getnet.com.br');
+    expect(result.jsonBody.user).toBe('ok');
+    expect(result.jsonBody.password).toBe('ok (kv)');
   });
 
-  test('returns degraded when env vars missing', async () => {
+  test('returns degraded when user env var missing', async () => {
     delete process.env.GETNET_USER;
-    delete process.env.GETNET_PASS;
 
     const handler = registeredRoutes['getnet-health'].handler;
     const result = await handler({}, {});
@@ -925,6 +929,7 @@ describe('Getnet Health', () => {
     expect(result.status).toBe(503);
     expect(result.jsonBody.status).toBe('degraded');
     expect(result.jsonBody.sftp).toBe('not_configured');
+    expect(result.jsonBody.user).toBe('missing');
   });
 });
 
