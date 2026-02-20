@@ -15,8 +15,8 @@
     },
     "dependencies": {
         "@azure/data-tables": "^13.2.2",
-        "@azure/identity": "^4.0.0",
-        "@azure/keyvault-secrets": "^4.7.0",
+        "@azure/identity": "^4.13.0",
+        "@azure/keyvault-secrets": "^4.10.0",
         "@azure/storage-queue": "^12.16.0",
         "durable-functions": "^3.0.0",
         "openai": "^4.20.0"
