@@ -8,6 +8,7 @@ on:
 
 env:
   AZURE_FUNCTIONAPP_NAME: 'wf-operacao-mesh'
+  AZURE_RESOURCE_GROUP: 'mesh-quantum'
   AZURE_FUNCTIONAPP_PACKAGE_PATH: '.'
   NODE_VERSION: '20.x'
 
@@ -109,16 +110,8 @@ jobs:
       - name: Fetch Function Key from Azure
         id: fetch-key
         run: |
-          # Discover resource group dynamically
-          RG=$(az functionapp list \
-            --query "[?name=='${{ env.AZURE_FUNCTIONAPP_NAME }}'].resourceGroup | [0]" \
-            --output tsv)
-          echo "Discovered resource group: $RG"
-
-          if [ -z "$RG" ] || [ "$RG" = "None" ]; then
-            echo "::error::Could not find resource group for ${{ env.AZURE_FUNCTIONAPP_NAME }}"
-            exit 1
-          fi
+          RG="${{ env.AZURE_RESOURCE_GROUP }}"
+          echo "Using resource group: $RG"
 
           # Fetch the default host key
           KEY=$(az functionapp keys list \
