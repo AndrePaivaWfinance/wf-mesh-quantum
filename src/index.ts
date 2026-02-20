@@ -40,6 +40,9 @@ import './activities/feedbackActivity';
 // Metrics
 import './functions/bpoMetrics';
 
+// Ops integrados ao mesh
+import './ops/nibo/index';
+
 // Ensure storage tables exist on startup
 import { ensureAllTables } from './storage/tableClient';
 ensureAllTables()
