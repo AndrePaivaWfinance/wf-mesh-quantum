@@ -169,28 +169,6 @@ export interface DadosEstabelecimento {
   trailer: GetnetTrailer | null;
 }
 
-/** Resumo financeiro por estabelecimento */
-export interface ResumoFinanceiro {
-  quantidade_registros: {
-    resumos_vendas: number;
-    comprovantes: number;
-    ajustes: number;
-    antecipacoes: number;
-    cessoes: number;
-    unidades_recebiveis: number;
-  };
-  valores_financeiros: {
-    valor_bruto_original: number;
-    taxa_getnet: number;
-    valor_pos_getnet: number;
-    taxa_cessao: number;
-    valor_depositado: number;
-    ajustes_total: number;
-    antecipacoes_bruto: number;
-    antecipacoes_liquido: number;
-  };
-}
-
 // ============================================================================
 // REQUEST / RESPONSE CONTRACTS
 // ============================================================================
