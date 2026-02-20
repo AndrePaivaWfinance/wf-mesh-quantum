@@ -591,36 +591,115 @@ export class SantanderClient {
   // ============================================================================
 
   async listComprovantes(params?: ComprovanteListParams): Promise<SantanderComprovante[]> {
-    logger.info('Listing comprovantes');
+    logger.info('Listing comprovantes', { params });
 
-    // Defaults para datas (últimos 7 dias)
     const today = new Date();
     const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
 
+    const startDate = params?.startDate || weekAgo.toISOString().split('T')[0];
+    const endDate = params?.endDate || today.toISOString().split('T')[0];
+
+    // Santander API has a 30-day limit. Split into chunks if needed.
+    const startMs = new Date(startDate).getTime();
+    const endMs = new Date(endDate).getTime();
+    const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+
+    if (endMs - startMs > thirtyDaysMs) {
+      const allComprovantes: SantanderComprovante[] = [];
+      let chunkStart = startMs;
+      while (chunkStart < endMs) {
+        const chunkEnd = Math.min(chunkStart + thirtyDaysMs, endMs);
+        const chunkStartStr = new Date(chunkStart).toISOString().split('T')[0];
+        const chunkEndStr = new Date(chunkEnd).toISOString().split('T')[0];
+        logger.info('Fetching comprovantes chunk', { chunkStartStr, chunkEndStr });
+        const chunk = await this.fetchComprovantesPage(chunkStartStr, chunkEndStr, params);
+        allComprovantes.push(...chunk);
+        chunkStart = chunkEnd + 24 * 60 * 60 * 1000; // next day
+      }
+      return allComprovantes;
+    }
+
+    return this.fetchComprovantesPage(startDate, endDate, params);
+  }
+
+  private async fetchComprovantesPage(
+    startDate: string,
+    endDate: string,
+    params?: ComprovanteListParams
+  ): Promise<SantanderComprovante[]> {
     const queryParams: Record<string, string | number | undefined> = {
-      start_date: params?.startDate || weekAgo.toISOString().split('T')[0],
-      end_date: params?.endDate || today.toISOString().split('T')[0],
+      start_date: startDate,
+      end_date: endDate,
       payment_type: params?.paymentType,
       beneficiary_document: params?.beneficiaryDocument,
       category: params?.category,
       account_agency: params?.accountAgency,
       account_number: params?.accountNumber,
-      _limit: params?._limit,
+      _limit: params?._limit || 100,
       _offset: params?._offset,
     };
 
-    try {
-      const response = await this.request<SantanderApiResponse<SantanderComprovante>>(
-        '/consult_payment_receipts/v1/payment_receipts',
-        'GET',
-        queryParams
-      );
+    const token = await this.getToken();
+    let url = `${this.baseUrl}/consult_payment_receipts/v1/payment_receipts`;
+    const searchParams = new URLSearchParams();
+    Object.entries(queryParams).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        searchParams.append(key, String(value));
+      }
+    });
+    const qs = searchParams.toString();
+    if (qs) url += `?${qs}`;
 
-      return this.extractContent(response);
-    } catch (error) {
-      logger.error('Failed to list comprovantes', error);
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'X-Application-Key': this.config.clientId,
+    };
+
+    if (this.config.workspaceId) {
+      headers['X-Workspace-Id'] = this.config.workspaceId;
+    }
+
+    const res = await this.httpFetch(url, { method: 'GET', headers });
+    const text = await res.text();
+
+    if (!res.ok) {
+      throw new Error(`Comprovantes API error ${res.status}: ${text.substring(0, 300)}`);
+    }
+
+    try {
+      const parsed = JSON.parse(text);
+
+      // Santander returns 'paymentsReceipts' array with nested structure
+      const rawReceipts = parsed.paymentsReceipts || parsed.paymentReceipts || parsed.payment_receipts || [];
+
+      if (Array.isArray(rawReceipts) && rawReceipts.length > 0) {
+        return rawReceipts.map((item: any) => this.mapComprovante(item));
+      }
+
+      // Fallback: try extractContent
+      const extracted = this.extractContent(parsed);
+      if (extracted.length > 0) return extracted;
+
+      return [];
+    } catch {
       return [];
     }
+  }
+
+  private mapComprovante(item: any): SantanderComprovante {
+    const payment = item.payment || {};
+    const payee = payment.payee || {};
+    const amountInfo = payment.paymentAmountInfo?.direct || payment.paymentAmountInfo || {};
+    return {
+      paymentId: payment.paymentId || item.id,
+      paymentType: item.category?.code || item.paymentType,
+      beneficiaryName: payee.name || payee.beneficiaryName,
+      beneficiaryDocument: payee.person?.document?.documentNumber || payee.document,
+      amount: parseFloat(amountInfo.amount || '0') || 0,
+      paymentDate: payment.requestValueDate?.split('T')[0] || payment.paymentDate,
+      status: payment.status || item.status || 'COMPLETED',
+    } as SantanderComprovante;
   }
 
   async requestComprovante(paymentId: string): Promise<{ requestId: string } | null> {
