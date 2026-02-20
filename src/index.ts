@@ -45,6 +45,7 @@ import './ops/nibo/index';
 import './ops/santander/index';
 import './ops/inter/index';
 import './ops/omie/index';
+import './ops/controlle/index';
 
 // Ensure storage tables exist on startup
 import { ensureAllTables } from './storage/tableClient';
