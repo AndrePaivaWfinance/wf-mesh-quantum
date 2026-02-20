@@ -34,6 +34,10 @@ export interface GetnetResumoVendas {
   ValorLiquido: number;
   ValorTarifa: number;
   TipoPagamento: string;
+  LinhaRaw: string;
+  /** Debug: campo [72:84] marcado como 'reservado' no layout — verificar se é valor bruto original */
+  _debug_campo72_84: string;
+  _debug_campo72_84_valor: number;
 }
 
 /** Comprovante de Vendas (Tipo 2) */

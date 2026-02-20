@@ -172,6 +172,9 @@ function parseResumoVendas(linha: string): GetnetResumoVendas {
     ValorLiquido: linha.length > 108 ? parseValor(linha.substring(96, 108)) : 0.0,
     ValorTarifa: linha.length > 132 ? parseValor(linha.substring(120, 132)) : 0.0,
     TipoPagamento: linha.length > 170 ? linha.substring(168, 170).trim() : '',
+    LinhaRaw: linha.substring(0, Math.min(200, linha.length)),
+    _debug_campo72_84: linha.length > 84 ? linha.substring(72, 84) : '',
+    _debug_campo72_84_valor: linha.length > 84 ? parseValor(linha.substring(72, 84)) : 0.0,
   };
 }
 
