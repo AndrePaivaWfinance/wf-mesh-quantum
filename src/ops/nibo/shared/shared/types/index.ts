@@ -58,9 +58,7 @@ export enum TransactionSource {
   NIBO = 'nibo',
   OMIE = 'omie',
   SANTANDER = 'santander',
-  INTER = 'inter',
   GETNET = 'getnet',
-  CONTROLLE = 'controlle',
   OFX = 'ofx',
   EXCEL = 'excel',
   CSV = 'csv',
@@ -84,7 +82,6 @@ export enum PaymentType {
 export enum ClientSystem {
   NIBO = 'nibo',
   OMIE = 'omie',
-  CONTROLLE = 'controlle',
 }
 
 /** Status do cliente */
@@ -93,13 +90,6 @@ export enum ClientStatus {
   INATIVO = 'inativo',
   ONBOARDING = 'onboarding',
   SUSPENSO = 'suspenso',
-}
-
-/** Plano do cliente */
-export enum ClientPlano {
-  ESSENCIAL = 'Essencial',
-  AVANCADO = 'Avançado',
-  PREMIUM = 'Premium',
 }
 
 /** Tipo de dúvida para revisão humana */
@@ -123,37 +113,16 @@ export enum CycleStatus {
 // INTERFACES - Core
 // ============================================================================
 
-/**
- * Cliente BPO - Modelo Unificado
- *
- * Fonte de verdade UNICA para dados de cliente.
- * Tabela: Clientes (stoperacoes)
- * PartitionKey: tenantId | RowKey: id
- *
- * Substitui as tabelas antigas:
- * - OperacaoClients (operacao-head)
- * - PortalClients (portal-api)
- * - clientes (webstatics API)
- */
+/** Cliente BPO */
 export interface Client {
   id: string;
-  tenantId: string; // slug curto para uso como PK em outras tabelas (ex: "wf-001")
   nome: string;
   cnpj: string;
-  email: string;
-  telefone?: string;
-
-  // Plano & Status
-  plano: ClientPlano;
   sistema: ClientSystem;
   status: ClientStatus;
 
   // Configurações de integração
   config: ClientConfig;
-
-  // Origem (se veio do pipeline comercial)
-  leadId?: string; // ID do lead que originou este cliente
-  contratoId?: string; // ID do contrato Adobe Sign
 
   // Metadados
   createdAt: string;
@@ -162,16 +131,10 @@ export interface Client {
 
 /** Configuração do cliente */
 export interface ClientConfig {
-  // Credenciais ERP - Nibo
+  // Sistema de gestão
   niboTenantId?: string;
-  niboApiKey?: string;
-
-  // Credenciais ERP - Omie
   omieAppKey?: string;
   omieAppSecret?: string;
-
-  // Credenciais ERP - Controlle
-  controlleApiKey?: string;
 
   // Banco
   banco?: string;
@@ -245,7 +208,6 @@ export interface Transaction {
   rawData?: Record<string, unknown>;
 
   // Metadados
-  metadata?: Record<string, any>;
   createdAt: string;
   updatedAt: string;
   capturedAt: string;
@@ -537,40 +499,19 @@ export function createTransaction(
   };
 }
 
-/** Gera tenantId a partir do nome (slug) */
-export function generateTenantId(nome: string): string {
-  return nome
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 30);
-}
-
-/** Cria um novo cliente (modelo unificado) */
-export function createClient(data: {
-  nome: string;
-  cnpj: string;
-  email: string;
-  telefone?: string;
-  sistema: ClientSystem;
-  plano?: ClientPlano;
-  tenantId?: string;
-  config?: Partial<ClientConfig>;
-  leadId?: string;
-  contratoId?: string;
-}): Client {
+/** Cria um novo cliente */
+export function createClient(
+  nome: string,
+  cnpj: string,
+  sistema: ClientSystem,
+  config: Partial<ClientConfig> = {}
+): Client {
   const now = new Date().toISOString();
   return {
     id: crypto.randomUUID(),
-    tenantId: data.tenantId || generateTenantId(data.nome),
-    nome: data.nome,
-    cnpj: data.cnpj,
-    email: data.email,
-    telefone: data.telefone,
-    plano: data.plano || ClientPlano.ESSENCIAL,
-    sistema: data.sistema,
+    nome,
+    cnpj,
+    sistema,
     status: ClientStatus.ONBOARDING,
     config: {
       notificacoes: {
@@ -580,79 +521,9 @@ export function createClient(data: {
         alertaVencimento: true,
       },
       categoriasCustomizadas: false,
-      ...data.config,
+      ...config,
     },
-    leadId: data.leadId,
-    contratoId: data.contratoId,
     createdAt: now,
     updatedAt: now,
   };
-}
-
-// ============================================================================
-// INTERFACES - AI & Automation (80/20 System)
-// ============================================================================
-
-/** Resultado da classificação avançada */
-export interface ClassificationResult {
-  categoria: string;
-  centroCusto?: string;
-  projeto?: string;
-  tipoDespesa: 'fixa' | 'variavel';
-  recorrencia: 'unica' | 'mensal' | 'anual';
-  confianca: number; // 0.0 a 1.0
-  alternativas: Array<{
-    categoria: string;
-    confianca: number;
-    razao: string;
-  }>;
-  explicacao: string;
-  modeloVersion?: string;
-}
-
-/** Anomalia detectada */
-export interface Anomaly {
-  tipo: 'valor' | 'frequencia' | 'timing' | 'fraude' | 'padrao_desconhecido';
-  severidade: 'baixa' | 'media' | 'alta' | 'critica';
-  transacaoId: string;
-  descricao: string;
-  razao: string;
-  sugestaoAcao: string;
-  autoResolve: boolean;
-  score: number; // 0.0 a 1.0 (quanto maior, mais anômalo)
-}
-
-/** Resultado do matching inteligente */
-export interface MatchResult {
-  previstoId?: string;
-  realizadoId?: string;
-  confianca: number;
-  tipo: 'exato' | 'fuzzy' | 'split' | 'agrupamento' | 'sem_match';
-  divergencias?: Array<{
-    campo: string;
-    esperado: any;
-    encontrado: any;
-  }>;
-  metadados?: Record<string, any>;
-}
-
-/** Decisão do motor de regras */
-export interface Decision {
-  acao: 'aprovar' | 'rejeitar' | 'escalar' | 'aguardar' | 'categorizar_auto' | 'sync_auto';
-  confianca: number;
-  razao: string;
-  requisitoHumano: boolean;
-  regrasAplicadas: string[];
-}
-
-/** Registro de feedback para aprendizado */
-export interface FeedbackRecord {
-  id: string;
-  transactionId: string;
-  clientId: string;
-  tipo: 'classificacao' | 'anomalia' | 'matching';
-  predictionIA: any;
-  correcaoHumana: any; // O que o humano decidiu/corrigiu
-  timestamp: string;
-  usuario?: string;
 }

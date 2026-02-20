@@ -247,28 +247,55 @@ async function runE2EFlow(): Promise<void> {
   }
 
   // ────────────────────────────────────────────────────────────
-  // STEP 5: Gerar Transações Simuladas
+  // STEP 5: Gerar Transações Simuladas (com persistência)
   // ────────────────────────────────────────────────────────────
   section('STEP 5: Gerar Transações Simuladas');
 
+  let simulatedTxCount = 0;
   const simRes = await request('POST', '/api/bpo/simulate', {
     clientId: testClientId || 'test-client',
   });
 
   if (simRes.ok) {
+    simulatedTxCount = simRes.body.transactionsStored || simRes.body.data?.length || 0;
     log('✓', `Simulação executada: ${simRes.status}`);
-    const txCount = Array.isArray(simRes.body) ? simRes.body.length :
-                    simRes.body.transactions?.length || simRes.body.count || '?';
-    log('  ', `Transações geradas: ${txCount}`);
-    if (Array.isArray(simRes.body) && simRes.body.length > 0) {
-      log('  ', `Exemplo: ${JSON.stringify(simRes.body[0]).substring(0, 120)}...`);
-    } else if (simRes.body.transactions?.length > 0) {
-      log('  ', `Exemplo: ${JSON.stringify(simRes.body.transactions[0]).substring(0, 120)}...`);
+    log('  ', `Transações gravadas no storage: ${simulatedTxCount}`);
+    if (simRes.body.data?.length > 0) {
+      for (const tx of simRes.body.data.slice(0, 3)) {
+        log('  ', `  ${tx.descricao || tx.id} | R$${tx.valor} | ${tx.status || tx.type}`);
+      }
+    }
+    if (simulatedTxCount === 0) {
+      log('!', 'Simulate não retornou transactionsStored (pode ser versão antiga)');
     }
   } else {
     log('!', `Simulação retornou ${simRes.status}: ${JSON.stringify(simRes.body).substring(0, 200)}`);
     if (simRes.status === 500) {
       errors.push(`Simulação falhou: ${simRes.status}`);
+    }
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // STEP 5b: Verificar Transações no Storage
+  // ────────────────────────────────────────────────────────────
+  section('STEP 5b: Verificar Transações no Storage');
+
+  if (testClientId) {
+    const txRes = await request('GET', `/api/bpo/transactions?clientId=${testClientId}`);
+    if (txRes.ok) {
+      log('✓', `Transações no storage: ${txRes.body.total}`);
+      if (txRes.body.items?.length > 0) {
+        for (const tx of txRes.body.items.slice(0, 3)) {
+          log('  ', `  [${tx.status}] ${(tx.descricao || '').substring(0, 50)} | R$${tx.valor}`);
+        }
+      }
+      if (txRes.body.total === 0) {
+        errors.push('Nenhuma transação encontrada no storage após simulate');
+      }
+    } else if (txRes.status === 404) {
+      log('!', 'Endpoint /api/bpo/transactions não disponível (deploy pendente)');
+    } else {
+      log('!', `Transações: ${txRes.status}`);
     }
   }
 
@@ -349,6 +376,44 @@ async function runE2EFlow(): Promise<void> {
     }
   } else {
     log('!', 'Sem cycle_id para monitorar');
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // STEP 7b: Verificar Transações Processadas Após Ciclo
+  // ────────────────────────────────────────────────────────────
+  section('STEP 7b: Transações Após Pipeline IA');
+
+  if (testClientId) {
+    const txAfterRes = await request('GET', `/api/bpo/transactions?clientId=${testClientId}`);
+    if (txAfterRes.ok && txAfterRes.body.total > 0) {
+      log('✓', `Total transações: ${txAfterRes.body.total}`);
+
+      // Count by status
+      const statusCounts: Record<string, number> = {};
+      for (const tx of txAfterRes.body.items) {
+        statusCounts[tx.status] = (statusCounts[tx.status] || 0) + 1;
+      }
+      for (const [st, count] of Object.entries(statusCounts)) {
+        log('  ', `  [${st}]: ${count}`);
+      }
+
+      // Check if any were classified (meaning AI pipeline ran)
+      const classified = (txAfterRes.body.items || []).filter(
+        (t: any) => t.status !== 'capturado' && t.status !== 'novo'
+      );
+      if (classified.length > 0) {
+        log('✓', `${classified.length} transações processadas pelo pipeline IA`);
+        for (const tx of classified.slice(0, 3)) {
+          log('  ', `  ${tx.descricao?.substring(0, 40)} → ${tx.categoriaNome || 'sem categoria'} (${tx.status})`);
+        }
+      } else {
+        log('!', 'Nenhuma transação foi processada pelo pipeline IA (pode ser normal se capture falhou)');
+      }
+    } else if (txAfterRes.status === 404) {
+      log('!', 'Endpoint /api/bpo/transactions não disponível');
+    } else {
+      log('!', `Sem transações após ciclo: ${txAfterRes.status}`);
+    }
   }
 
   // ────────────────────────────────────────────────────────────
