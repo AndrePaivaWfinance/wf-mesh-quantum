@@ -21,7 +21,7 @@
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/functions';
 import * as crypto from 'crypto';
 import { getGetnetClient } from '../adapters/client';
-import { parseConteudo, filtrarPorEstabelecimento, calcularResumoFinanceiro } from '../adapters/fileHelper';
+import { parseConteudo } from '../adapters/fileHelper';
 import {
   CaptureRequest,
   CaptureResponse,
@@ -436,6 +436,116 @@ function filtrarResumosVendas(
 }
 
 // ============================================================================
+// GERAÇÃO UNIFICADA DE TRANSAÇÕES (usada por listar e ingerir)
+// ============================================================================
+
+function gerarTransacoes(
+  registros: GetnetRegistro[],
+  clientId: string,
+  cycleId: string,
+  dataMovimento: string,
+  codigoEstabelecimento?: string
+) {
+  const transactions: Transaction[] = [];
+  let totalReceber = 0;
+  let totalPagar = 0;
+  let totalVendas = 0;
+
+  // Processar RESUMOS DE VENDAS (Tipo 1)
+  const resumosVendas = filtrarResumosVendas(registros, dataMovimento, codigoEstabelecimento);
+
+  for (const venda of resumosVendas) {
+    transactions.push(vendaToReceber(venda, clientId, cycleId, dataMovimento));
+    totalReceber++;
+
+    if (venda.ValorTarifa > 0) {
+      transactions.push(vendaToPagar(venda, clientId, cycleId, dataMovimento));
+      totalPagar++;
+    }
+
+    transactions.push(vendaToVendaCartao(venda, clientId, cycleId, dataMovimento));
+    totalVendas++;
+  }
+
+  // Processar AJUSTES FINANCEIROS (Tipo 3) - excluir RVs já liquidados
+  const rvsLiquidados = new Set<string>();
+  for (const r of registros) {
+    if (r.TipoRegistro === 1 && (r as GetnetResumoVendas).TipoPagamento === 'LQ') {
+      const rv = (r as GetnetResumoVendas).NumeroRV;
+      if (rv) rvsLiquidados.add(rv);
+    }
+  }
+
+  let ajustes = registros.filter(r => r.TipoRegistro === 3) as GetnetAjusteFinanceiro[];
+  if (codigoEstabelecimento) {
+    ajustes = ajustes.filter(r => r.CodigoEstabelecimento.trim() === codigoEstabelecimento);
+  }
+  ajustes = ajustes.filter(r => !rvsLiquidados.has(r.NumeroRV));
+
+  logger.info(`Processando ${ajustes.length} ajustes financeiros`);
+  for (const ajuste of ajustes) {
+    const tx = ajusteToTransaction(ajuste, clientId, cycleId, dataMovimento);
+    transactions.push(tx);
+    if (tx.type === TransactionType.PAGAR) totalPagar++;
+    else totalReceber++;
+  }
+
+  // Processar ANTECIPAÇÕES (Tipo 4)
+  let antecipacoes = registros.filter(r => r.TipoRegistro === 4) as GetnetAntecipacao[];
+  if (codigoEstabelecimento) {
+    antecipacoes = antecipacoes.filter(r => r.CodigoEstabelecimento.trim() === codigoEstabelecimento);
+  }
+
+  logger.info(`Processando ${antecipacoes.length} antecipações`);
+  for (const antecipacao of antecipacoes) {
+    const txs = antecipacaoToTransactions(antecipacao, clientId, cycleId, dataMovimento);
+    for (const tx of txs) {
+      transactions.push(tx);
+      if (tx.type === TransactionType.PAGAR) totalPagar++;
+      else totalReceber++;
+    }
+  }
+
+  // Processar CESSÕES (Tipo 5) - apenas CS
+  let cessoes = registros.filter(r => r.TipoRegistro === 5) as GetnetNegociacaoCessao[];
+  if (codigoEstabelecimento) {
+    cessoes = cessoes.filter(r => r.CodigoEstabelecimento.trim() === codigoEstabelecimento);
+  }
+  cessoes = cessoes.filter(r => r.Indicador === 'CS');
+
+  logger.info(`Processando ${cessoes.length} cessões CS`);
+  for (const cessao of cessoes) {
+    const txs = cessaoToTransactions(cessao, clientId, cycleId, dataMovimento);
+    for (const tx of txs) {
+      transactions.push(tx);
+      if (tx.type === TransactionType.PAGAR) totalPagar++;
+      else totalReceber++;
+    }
+  }
+
+  // Tipo 6 (URs) - IGNORADO
+  const urs = registros.filter(r => r.TipoRegistro === 6);
+  if (urs.length > 0) {
+    logger.info(`Tipo 6 (URs): ${urs.length} registros ignorados (apenas agenda/informativo)`);
+  }
+
+  // Resumo com valores BRUTOS (fonte de verdade — líquidos se calculam)
+  const resumoBruto = {
+    vendas_bruto: resumosVendas.reduce((s, v) => s + v.ValorBruto, 0),
+    taxa_getnet: resumosVendas.reduce((s, v) => s + v.ValorTarifa, 0),
+    ajustes_bruto: ajustes.reduce((s, a) => s + (a.SinalTransacao === '-' ? -a.ValorAjuste : a.ValorAjuste), 0),
+    antecipacoes_bruto: antecipacoes.reduce((s, a) => s + a.ValorBrutoAntecipacao, 0),
+    cessoes_bruto: cessoes.reduce((s, c) => s + c.ValorBrutoCessao, 0),
+  };
+
+  return {
+    transactions,
+    totais: { receber: totalReceber, pagar: totalPagar, vendas: totalVendas },
+    resumoBruto,
+  };
+}
+
+// ============================================================================
 // HTTP HANDLER
 // ============================================================================
 
@@ -529,124 +639,41 @@ app.http('getnet-capture', {
         };
       }
 
-      // 6. Se ação é LISTAR, retornar dados organizados por estabelecimento
-      if (action === 'listar') {
-        const dadosPorEstabelecimento = Array.from(estabelecimentosUnicos).map(codigo => {
-          const dados = filtrarPorEstabelecimento(registros, codigo);
-          const resumo = calcularResumoFinanceiro(dados);
-          return { codigo_estabelecimento: codigo, resumo, dados };
-        });
+      // 6. Gerar transações (lógica unificada para listar e ingerir)
+      const { transactions, totais, resumoBruto } = gerarTransacoes(
+        registros, clientId, cycleId, dataMovimento, codigoEstabelecimento
+      );
 
+      logger.info(`Transações geradas: RECEBER=${totais.receber} PAGAR=${totais.pagar} VENDAS=${totais.vendas}`);
+
+      // 7. LISTAR = dry-run (mesma lógica do ingerir, sem persistir)
+      if (action === 'listar') {
         return {
           status: 200,
           jsonBody: {
             success: true,
             action: 'listar',
+            source: 'getnet',
+            clientId,
+            cycleId,
             arquivo: {
               nome: nomeArquivo,
               tamanho_bytes: resultado.tamanhoBytes,
               total_linhas: resultado.totalLinhas,
               data_movimento: dataMovimento,
             },
-            dados: {
-              total_estabelecimentos: estabelecimentosUnicos.size,
-              estabelecimentos: dadosPorEstabelecimento,
-            },
+            resumo: resumoBruto,
+            transactions,
+            totais,
+            durationMs: Date.now() - startTime,
           },
         };
       }
 
-      // 7. AÇÃO PRINCIPAL: INGERIR/CAPTURE
-      // Buscar transações existentes para idempotência
+      // 8. INGERIR = persistir com idempotência
       const existingSourceIds = await getExistingSourceIds(clientId, 'getnet');
       logger.info('Existing Getnet transactions', { count: existingSourceIds.size });
 
-      const transactions: Transaction[] = [];
-      let totalReceber = 0;
-      let totalPagar = 0;
-      let totalVendas = 0;
-
-      // 7a. Processar RESUMOS DE VENDAS (Tipo 1)
-      const resumosVendas = filtrarResumosVendas(registros, dataMovimento, codigoEstabelecimento);
-
-      for (const venda of resumosVendas) {
-        // RECEBER (valor bruto)
-        transactions.push(vendaToReceber(venda, clientId, cycleId, dataMovimento));
-        totalReceber++;
-
-        // PAGAR (taxa maquineta)
-        if (venda.ValorTarifa > 0) {
-          transactions.push(vendaToPagar(venda, clientId, cycleId, dataMovimento));
-          totalPagar++;
-        }
-
-        // VENDA_CARTAO (informativo)
-        transactions.push(vendaToVendaCartao(venda, clientId, cycleId, dataMovimento));
-        totalVendas++;
-      }
-
-      // 7b. Processar AJUSTES FINANCEIROS (Tipo 3)
-      // Excluir ajustes de vendas já liquidadas (LQ)
-      const rvsLiquidados = new Set<string>();
-      for (const r of registros) {
-        if (r.TipoRegistro === 1 && (r as GetnetResumoVendas).TipoPagamento === 'LQ') {
-          const rv = (r as GetnetResumoVendas).NumeroRV;
-          if (rv) rvsLiquidados.add(rv);
-        }
-      }
-
-      let ajustes = registros.filter(r => r.TipoRegistro === 3) as GetnetAjusteFinanceiro[];
-      if (codigoEstabelecimento) {
-        ajustes = ajustes.filter(r => r.CodigoEstabelecimento.trim() === codigoEstabelecimento);
-      }
-      ajustes = ajustes.filter(r => !rvsLiquidados.has(r.NumeroRV));
-
-      logger.info(`Processando ${ajustes.length} ajustes financeiros`);
-      for (const ajuste of ajustes) {
-        const tx = ajusteToTransaction(ajuste, clientId, cycleId, dataMovimento);
-        transactions.push(tx);
-        if (tx.type === TransactionType.PAGAR) totalPagar++;
-        else totalReceber++;
-      }
-
-      // 7c. Processar ANTECIPAÇÕES (Tipo 4)
-      let antecipacoes = registros.filter(r => r.TipoRegistro === 4) as GetnetAntecipacao[];
-      if (codigoEstabelecimento) {
-        antecipacoes = antecipacoes.filter(r => r.CodigoEstabelecimento.trim() === codigoEstabelecimento);
-      }
-
-      logger.info(`Processando ${antecipacoes.length} antecipações`);
-      for (const antecipacao of antecipacoes) {
-        const txs = antecipacaoToTransactions(antecipacao, clientId, cycleId, dataMovimento);
-        for (const tx of txs) {
-          transactions.push(tx);
-          if (tx.type === TransactionType.PAGAR) totalPagar++;
-          else totalReceber++;
-        }
-      }
-
-      // 7d. Processar CESSÕES (Tipo 5) - apenas CS
-      let cessoes = registros.filter(r => r.TipoRegistro === 5) as GetnetNegociacaoCessao[];
-      if (codigoEstabelecimento) {
-        cessoes = cessoes.filter(r => r.CodigoEstabelecimento.trim() === codigoEstabelecimento);
-      }
-      cessoes = cessoes.filter(r => r.Indicador === 'CS');
-
-      logger.info(`Processando ${cessoes.length} cessões CS`);
-      for (const cessao of cessoes) {
-        const txs = cessaoToTransactions(cessao, clientId, cycleId, dataMovimento);
-        for (const tx of txs) {
-          transactions.push(tx);
-          if (tx.type === TransactionType.PAGAR) totalPagar++;
-          else totalReceber++;
-        }
-      }
-
-      // 7e. Tipo 6 (URs) - IGNORADO (apenas informativo)
-      const urs = registros.filter(r => r.TipoRegistro === 6);
-      logger.info(`Tipo 6 (URs): ${urs.length} registros ignorados (apenas agenda/informativo)`);
-
-      // 8. Persistir com idempotência
       let result = { created: [] as string[], updated: [] as string[], skipped: [] as string[] };
       if (transactions.length > 0) {
         result = await upsertTransactionsIdempotent(transactions, existingSourceIds);
@@ -657,7 +684,7 @@ app.http('getnet-capture', {
         });
       }
 
-      logger.info(`Captura Getnet concluída: RECEBER=${totalReceber} PAGAR=${totalPagar} VENDAS=${totalVendas}`);
+      logger.info(`Captura Getnet concluída: RECEBER=${totais.receber} PAGAR=${totais.pagar} VENDAS=${totais.vendas}`);
 
       const response: CaptureResponse = {
         success: true,
@@ -670,9 +697,9 @@ app.http('getnet-capture', {
           updated: result.updated.length,
           skipped: result.skipped.length,
         },
-        receber: totalReceber,
-        pagar: totalPagar,
-        vendas: totalVendas,
+        receber: totais.receber,
+        pagar: totais.pagar,
+        vendas: totais.vendas,
         durationMs: Date.now() - startTime,
       };
 

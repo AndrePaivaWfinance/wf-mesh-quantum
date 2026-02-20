@@ -34,6 +34,10 @@ export interface GetnetResumoVendas {
   ValorLiquido: number;
   ValorTarifa: number;
   TipoPagamento: string;
+  LinhaRaw: string;
+  /** Debug: campo [72:84] marcado como 'reservado' no layout — verificar se é valor bruto original */
+  _debug_campo72_84: string;
+  _debug_campo72_84_valor: number;
 }
 
 /** Comprovante de Vendas (Tipo 2) */
@@ -167,28 +171,6 @@ export interface DadosEstabelecimento {
   negociacoes_cessao: GetnetNegociacaoCessao[];
   unidades_recebiveis: GetnetUnidadeRecebivel[];
   trailer: GetnetTrailer | null;
-}
-
-/** Resumo financeiro por estabelecimento */
-export interface ResumoFinanceiro {
-  quantidade_registros: {
-    resumos_vendas: number;
-    comprovantes: number;
-    ajustes: number;
-    antecipacoes: number;
-    cessoes: number;
-    unidades_recebiveis: number;
-  };
-  valores_financeiros: {
-    valor_bruto_original: number;
-    taxa_getnet: number;
-    valor_pos_getnet: number;
-    taxa_cessao: number;
-    valor_depositado: number;
-    ajustes_total: number;
-    antecipacoes_bruto: number;
-    antecipacoes_liquido: number;
-  };
 }
 
 // ============================================================================

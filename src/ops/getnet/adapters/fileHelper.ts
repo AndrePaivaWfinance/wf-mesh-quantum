@@ -28,7 +28,6 @@ import {
   GetnetUnidadeRecebivel,
   GetnetTrailer,
   DadosEstabelecimento,
-  ResumoFinanceiro,
 } from './types';
 
 const logger = createLogger('GetnetFileHelper');
@@ -173,6 +172,9 @@ function parseResumoVendas(linha: string): GetnetResumoVendas {
     ValorLiquido: linha.length > 108 ? parseValor(linha.substring(96, 108)) : 0.0,
     ValorTarifa: linha.length > 132 ? parseValor(linha.substring(120, 132)) : 0.0,
     TipoPagamento: linha.length > 170 ? linha.substring(168, 170).trim() : '',
+    LinhaRaw: linha.substring(0, Math.min(200, linha.length)),
+    _debug_campo72_84: linha.length > 84 ? linha.substring(72, 84) : '',
+    _debug_campo72_84_valor: linha.length > 84 ? parseValor(linha.substring(72, 84)) : 0.0,
   };
 }
 
@@ -486,75 +488,6 @@ export function filtrarPorEstabelecimento(
   return dados;
 }
 
-/**
- * Calcula resumo financeiro dos dados parseados
- */
-export function calcularResumoFinanceiro(dados: DadosEstabelecimento): ResumoFinanceiro {
-  const resumo: ResumoFinanceiro = {
-    quantidade_registros: {
-      resumos_vendas: dados.resumos_vendas.length,
-      comprovantes: dados.comprovantes_vendas.length,
-      ajustes: dados.ajustes_financeiros.length,
-      antecipacoes: dados.antecipacoes.length,
-      cessoes: dados.negociacoes_cessao.length,
-      unidades_recebiveis: dados.unidades_recebiveis.length,
-    },
-    valores_financeiros: {
-      valor_bruto_original: 0.0,
-      taxa_getnet: 0.0,
-      valor_pos_getnet: 0.0,
-      taxa_cessao: 0.0,
-      valor_depositado: 0.0,
-      ajustes_total: 0.0,
-      antecipacoes_bruto: 0.0,
-      antecipacoes_liquido: 0.0,
-    },
-  };
-
-  // Mapa RV -> ValorParcela do Type 2
-  const valorBrutoPorRV: Record<string, number> = {};
-  for (const cv of dados.comprovantes_vendas) {
-    if (cv.NumeroRV && cv.ValorParcela > 0) {
-      valorBrutoPorRV[cv.NumeroRV] = cv.ValorParcela;
-    }
-  }
-
-  // Vendas (excluir LQ)
-  for (const venda of dados.resumos_vendas) {
-    if (venda.TipoPagamento === 'LQ') continue;
-
-    let valorBruto = venda.ValorBruto;
-    if (venda.NumeroRV in valorBrutoPorRV) {
-      valorBruto = valorBrutoPorRV[venda.NumeroRV];
-    }
-
-    resumo.valores_financeiros.valor_bruto_original += valorBruto;
-    resumo.valores_financeiros.taxa_getnet += venda.ValorTarifa;
-    resumo.valores_financeiros.valor_pos_getnet += venda.ValorLiquido;
-  }
-
-  // Ajustes
-  for (const ajuste of dados.ajustes_financeiros) {
-    let valor = ajuste.ValorAjuste;
-    if (ajuste.SinalTransacao === '-') valor = -valor;
-    resumo.valores_financeiros.ajustes_total += valor;
-  }
-
-  // Antecipações
-  for (const antecipacao of dados.antecipacoes) {
-    resumo.valores_financeiros.antecipacoes_bruto += antecipacao.ValorBrutoAntecipacao;
-    resumo.valores_financeiros.antecipacoes_liquido += antecipacao.ValorLiquidoAntecipacao;
-  }
-
-  // Cessões (apenas CS)
-  for (const cessao of dados.negociacoes_cessao) {
-    if (cessao.Indicador !== 'CS') continue;
-    resumo.valores_financeiros.taxa_cessao += cessao.ValorTaxaCessao;
-    resumo.valores_financeiros.valor_depositado += cessao.ValorLiquidoCessao;
-  }
-
-  return resumo;
-}
 
 // ============================================================================
 // FUNÇÕES AUXILIARES DE PARSE
