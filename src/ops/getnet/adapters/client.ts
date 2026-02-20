@@ -2,14 +2,17 @@
  * Getnet SFTP Client - Cliente para download de arquivos de conciliação
  * Migrado de wf-financeiro/shared/getnet_client.py
  *
- * Conecta ao SFTP da Getnet (sftp1.getnet.com.br) e baixa arquivos
+ * Conecta ao SFTP da Getnet (getsftp2.getnet.com.br) e baixa arquivos
  * posicionais de conciliação (getnetextr_YYYYMMDD.txt).
  *
- * Nota: Usa ssh2-sftp-client para conexão SFTP em Node.js.
- * Se ssh2-sftp-client não estiver disponível, funciona em modo mock
- * para testes locais.
+ * Credenciais:
+ *   - Host/Port: hardcoded
+ *   - GETNET_USER: env var do Function App
+ *   - GETNET_PASS: Key Vault (kv-wf-core)
  */
 
+import { DefaultAzureCredential } from '@azure/identity';
+import { SecretClient } from '@azure/keyvault-secrets';
 import { createLogger } from '../shared/utils';
 import { GetnetArquivoSFTP, GetnetSFTPResult } from './types';
 
@@ -19,21 +22,38 @@ const logger = createLogger('GetnetClient');
 // CLIENT CLASS
 // ============================================================================
 
+const KV_URL = 'https://kv-wf-core.vault.azure.net';
+const KV_SECRET_NAME = 'GETNET-PASS';
+
+async function getPasswordFromKeyVault(): Promise<string> {
+  try {
+    const credential = new DefaultAzureCredential();
+    const client = new SecretClient(KV_URL, credential);
+    const secret = await client.getSecret(KV_SECRET_NAME);
+    return secret.value || '';
+  } catch (e: any) {
+    logger.error(`Erro ao buscar GETNET_PASS no Key Vault: ${e.message}`);
+    return '';
+  }
+}
+
 export class GetnetClient {
-  private host: string;
-  private port: number;
+  private host = 'getsftp2.getnet.com.br';
+  private port = 22;
   private username: string;
-  private password: string;
-  private remoteDir: string;
+  private password: string | null = null;
+  private remoteDir = '.';
 
   constructor() {
-    this.host = 'sftp1.getnet.com.br';
-    this.port = 22;
     this.username = process.env.GETNET_USER || '';
-    this.password = process.env.GETNET_PASS || '';
-    this.remoteDir = '.';
-
     logger.info(`Cliente Getnet inicializado - User: ${this.username}`);
+  }
+
+  private async getPassword(): Promise<string> {
+    if (!this.password) {
+      this.password = await getPasswordFromKeyVault();
+    }
+    return this.password;
   }
 
   /**
@@ -68,12 +88,13 @@ export class GetnetClient {
       sftp = new SftpClient();
 
       // Conectar
+      const password = await this.getPassword();
       logger.info(`Conectando ao SFTP: ${this.host}:${this.port}`);
       await sftp.connect({
         host: this.host,
         port: this.port,
         username: this.username,
-        password: this.password,
+        password,
         readyTimeout: 30000,
       });
       logger.info('Conectado com sucesso ao SFTP Getnet');
@@ -170,12 +191,13 @@ export class GetnetClient {
 
       sftp = new SftpClient();
 
+      const password = await this.getPassword();
       logger.info(`Conectando ao SFTP: ${this.host}:${this.port}`);
       await sftp.connect({
         host: this.host,
         port: this.port,
         username: this.username,
-        password: this.password,
+        password,
         readyTimeout: 30000,
       });
 
