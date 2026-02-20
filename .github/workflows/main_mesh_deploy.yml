@@ -109,20 +109,41 @@ jobs:
       - name: Fetch Function Key from Azure
         id: fetch-key
         run: |
+          # Discover resource group dynamically
+          RG=$(az functionapp list \
+            --query "[?name=='${{ env.AZURE_FUNCTIONAPP_NAME }}'].resourceGroup | [0]" \
+            --output tsv)
+          echo "Discovered resource group: $RG"
+
+          if [ -z "$RG" ] || [ "$RG" = "None" ]; then
+            echo "::error::Could not find resource group for ${{ env.AZURE_FUNCTIONAPP_NAME }}"
+            exit 1
+          fi
+
+          # Fetch the default host key
           KEY=$(az functionapp keys list \
             --name ${{ env.AZURE_FUNCTIONAPP_NAME }} \
-            --resource-group wfinance \
-            --query "functionKeys.default // masterKey" \
-            --output tsv 2>/dev/null || echo "")
-          if [ -z "$KEY" ]; then
+            --resource-group "$RG" \
+            --query "functionKeys.default" \
+            --output tsv)
+
+          if [ -z "$KEY" ] || [ "$KEY" = "None" ]; then
+            echo "Default function key not found, trying master key..."
             KEY=$(az functionapp keys list \
               --name ${{ env.AZURE_FUNCTIONAPP_NAME }} \
-              --resource-group wfinance \
+              --resource-group "$RG" \
               --query "masterKey" \
-              --output tsv 2>/dev/null || echo "")
+              --output tsv)
           fi
+
+          if [ -z "$KEY" ] || [ "$KEY" = "None" ]; then
+            echo "::error::Could not fetch any function key from Azure"
+            exit 1
+          fi
+
           echo "::add-mask::$KEY"
           echo "key=$KEY" >> $GITHUB_OUTPUT
+          echo "Function key fetched successfully (${#KEY} chars)"
 
       - name: Wait for deployment to stabilize
         run: sleep 30
