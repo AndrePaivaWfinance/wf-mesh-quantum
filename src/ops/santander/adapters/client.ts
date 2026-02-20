@@ -136,6 +136,78 @@ export class SantanderClient {
   }
 
   // ============================================================================
+  // HTTP FETCH WITH mTLS SUPPORT
+  // ============================================================================
+
+  /**
+   * Wrapper around HTTP requests that supports mTLS via https.Agent.
+   * Node.js global fetch() does NOT support https.Agent, so we use
+   * https.request when mTLS certificates are configured.
+   */
+  private httpFetch(
+    url: string,
+    options: { method: string; headers: Record<string, string>; body?: string }
+  ): Promise<{
+    ok: boolean;
+    status: number;
+    headers: { get(name: string): string | null };
+    text(): Promise<string>;
+    json(): Promise<unknown>;
+    arrayBuffer(): Promise<ArrayBuffer>;
+  }> {
+    if (!this.httpsAgent) {
+      // No mTLS needed, use global fetch
+      return fetch(url, options) as any;
+    }
+
+    // Use https.request for mTLS
+    return new Promise((resolve, reject) => {
+      const parsed = new URL(url);
+      const req = https.request(
+        {
+          hostname: parsed.hostname,
+          port: parsed.port ? Number(parsed.port) : 443,
+          path: parsed.pathname + parsed.search,
+          method: options.method,
+          headers: options.headers,
+          agent: this.httpsAgent,
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (chunk: Buffer) => chunks.push(chunk));
+          res.on('end', () => {
+            const rawData = Buffer.concat(chunks);
+            const textData = rawData.toString('utf-8');
+            const statusCode = res.statusCode || 500;
+
+            resolve({
+              ok: statusCode >= 200 && statusCode < 300,
+              status: statusCode,
+              headers: {
+                get(name: string): string | null {
+                  const val = res.headers[name.toLowerCase()];
+                  return Array.isArray(val) ? val[0] : val || null;
+                },
+              },
+              text: async () => textData,
+              json: async () => JSON.parse(textData),
+              arrayBuffer: async () =>
+                rawData.buffer.slice(
+                  rawData.byteOffset,
+                  rawData.byteOffset + rawData.byteLength
+                ),
+            });
+          });
+        }
+      );
+
+      req.on('error', reject);
+      if (options.body) req.write(options.body);
+      req.end();
+    });
+  }
+
+  // ============================================================================
   // AUTHENTICATION
   // ============================================================================
 
@@ -161,16 +233,14 @@ export class SantanderClient {
         client_secret: this.config.clientSecret,
       });
 
-      const fetchOptions: RequestInit = {
+      // Use httpFetch for mTLS support
+      const response = await this.httpFetch(this.authUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
         },
         body: body.toString(),
-      };
-
-      // Node.js fetch com HTTPS agent para mTLS
-      const response = await fetch(this.authUrl, fetchOptions);
+      });
 
       if (!response.ok) {
         const error = await response.text();
@@ -234,7 +304,8 @@ export class SantanderClient {
 
     return withRetry(
       async () => {
-        const res = await fetch(url, {
+        // Use httpFetch for mTLS support
+        const res = await this.httpFetch(url, {
           method,
           headers,
           body: body ? JSON.stringify(body) : undefined,

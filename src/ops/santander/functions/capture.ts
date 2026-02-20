@@ -13,22 +13,33 @@ import { Transaction, TransactionType, TransactionSource, TransactionStatus } fr
 
 const logger = createLogger('SantanderCapture');
 
+/** Parse Santander decimal: "1480,0" -> 1480.0 */
+function parseDecimal(val: unknown): number {
+  if (typeof val === 'number') return val;
+  if (typeof val === 'string') return parseFloat(val.replace(',', '.')) || 0;
+  return 0;
+}
+
 function ddaToTransaction(dda: SantanderDDA, clientId: string, cycleId: string): Transaction {
+  // API retorna 'code' ao invés de 'barCode'
+  const barCode = dda.barCode || (dda as any).code || '';
+  const nominal = parseDecimal(dda.nominalValue);
+  const total = parseDecimal(dda.totalValue) || nominal;
   return {
-    id: `sant-dda-${dda.barCode.substring(0, 15)}-${Date.now()}`,
+    id: `sant-dda-${barCode.substring(0, 15)}-${Date.now()}`,
     clientId,
     type: TransactionType.PAGAR,
     status: TransactionStatus.CAPTURADO,
     source: TransactionSource.SANTANDER,
-    valor: dda.nominalValue,
-    valorOriginal: dda.totalValue || dda.nominalValue,
+    valor: nominal,
+    valorOriginal: total,
     dataVencimento: dda.dueDate,
-    descricao: `DDA - ${dda.beneficiary?.beneficiaryName || 'Boleto'}`,
-    descricaoOriginal: `DDA ${dda.barCode}`,
-    contraparte: dda.beneficiary?.beneficiaryName,
-    contraparteCnpj: dda.beneficiary?.beneficiaryDocument,
-    codigoBarras: dda.barCode,
-    sourceId: dda.barCode,
+    descricao: `DDA - ${dda.beneficiary?.beneficiaryName?.trim() || 'Boleto'}`,
+    descricaoOriginal: `DDA ${barCode}`,
+    contraparte: dda.beneficiary?.beneficiaryName?.trim(),
+    contraparteCnpj: String(dda.beneficiary?.beneficiaryDocument || ''),
+    codigoBarras: barCode,
+    sourceId: barCode,
     sourceName: 'santander',
     rawData: JSON.parse(JSON.stringify(dda)),
     createdAt: nowISO(),
