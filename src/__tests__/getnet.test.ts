@@ -93,7 +93,7 @@ jest.mock('../storage/tableClient', () => ({
   }),
 }));
 
-import { parseConteudo, filtrarPorEstabelecimento } from '../ops/getnet/adapters/fileHelper';
+import { parseConteudo, filtrarPorEstabelecimento, parearManPos } from '../ops/getnet/adapters/fileHelper';
 import type {
   GetnetRegistro,
   GetnetHeader,
@@ -138,11 +138,16 @@ function buildHeader(opts: { data?: string; codEstab?: string; cnpj?: string } =
 }
 
 /**
- * Build a Type 1 (Resumo de Vendas) line
+ * Build a Type 1 (Resumo de Vendas) line — V10.1 layout
  * Layout: [0:1] Tipo, [1:16] CodEstab, [16:18] Produto, [18:21] Bandeira,
- *          [21:30] NumRV, [30:38] DataRV, [38:46] DataPgto, [46:60] CNPJ,
- *          [60:72] QtdCV, [84:96] ValorBruto, [96:108] ValorLiquido,
- *          [120:132] ValorTarifa, [168:170] TipoPgto
+ *          [21:30] NumRV, [30:38] DataRV, [38:46] DataPgto,
+ *          [46:49] Banco, [49:55] Agencia, [55:66] ContaCorrente,
+ *          [66:75] CVsAceitos, [75:84] CVsRejeitados,
+ *          [84:96] ValorBruto, [96:108] ValorLiquido,
+ *          [108:120] ValorTaxaServico, [120:132] ValorTaxaDesconto,
+ *          [132:144] ValorRejeitado, [144:156] ValorCredito, [156:168] ValorEncargos,
+ *          [168:170] TipoPgto, [170:172] NumeroParcela, [172:174] QuantidadeParcelas,
+ *          [174:189] CodEstabCentralizador
  */
 function buildResumoVendas(opts: {
   codEstab?: string;
@@ -153,8 +158,15 @@ function buildResumoVendas(opts: {
   dataPgto?: string;    // DDMMAAAA
   valorBruto?: number;  // in centavos
   valorLiquido?: number;
-  valorTarifa?: number;
+  valorTaxaDesconto?: number;
   tipoPgto?: string;
+  banco?: string;
+  agencia?: string;
+  contaCorrente?: string;
+  cvsAceitos?: number;
+  cvsRejeitados?: number;
+  numeroParcela?: number;
+  quantidadeParcelas?: number;
 } = {}): string {
   const line = new Array(401).fill(' ');
   line[0] = '1';
@@ -177,11 +189,25 @@ function buildResumoVendas(opts: {
   const dataPgto = pad(opts.dataPgto || '20022026', 8);
   for (let i = 0; i < 8; i++) line[38 + i] = dataPgto[i];
 
-  const cnpj = pad('12345678000199', 14);
-  for (let i = 0; i < 14; i++) line[46 + i] = cnpj[i];
+  // Banco [46:49]
+  const banco = pad(opts.banco || '033', 3);
+  for (let i = 0; i < 3; i++) line[46 + i] = banco[i];
 
-  const qtdCV = padNum(5, 12);
-  for (let i = 0; i < 12; i++) line[60 + i] = qtdCV[i];
+  // Agência [49:55]
+  const agencia = pad(opts.agencia || '001234', 6);
+  for (let i = 0; i < 6; i++) line[49 + i] = agencia[i];
+
+  // ContaCorrente [55:66]
+  const contaCorrente = pad(opts.contaCorrente || '00012345678', 11);
+  for (let i = 0; i < 11; i++) line[55 + i] = contaCorrente[i];
+
+  // CVs Aceitos [66:75]
+  const cvsAceitos = padNum(opts.cvsAceitos ?? 1, 9);
+  for (let i = 0; i < 9; i++) line[66 + i] = cvsAceitos[i];
+
+  // CVs Rejeitados [75:84]
+  const cvsRejeitados = padNum(opts.cvsRejeitados ?? 0, 9);
+  for (let i = 0; i < 9; i++) line[75 + i] = cvsRejeitados[i];
 
   const valorBruto = padNum(opts.valorBruto ?? 100000, 12); // R$ 1000.00
   for (let i = 0; i < 12; i++) line[84 + i] = valorBruto[i];
@@ -189,11 +215,36 @@ function buildResumoVendas(opts: {
   const valorLiquido = padNum(opts.valorLiquido ?? 95000, 12); // R$ 950.00
   for (let i = 0; i < 12; i++) line[96 + i] = valorLiquido[i];
 
-  const valorTarifa = padNum(opts.valorTarifa ?? 5000, 12); // R$ 50.00
-  for (let i = 0; i < 12; i++) line[120 + i] = valorTarifa[i];
+  // ValorTaxaServico [108:120] - zero by default
+  const valorTaxaServico = padNum(0, 12);
+  for (let i = 0; i < 12; i++) line[108 + i] = valorTaxaServico[i];
+
+  // ValorTaxaDesconto [120:132]
+  const valorTaxaDesconto = padNum(opts.valorTaxaDesconto ?? 5000, 12); // R$ 50.00
+  for (let i = 0; i < 12; i++) line[120 + i] = valorTaxaDesconto[i];
+
+  // ValorRejeitado [132:144] - zero by default
+  const valorRejeitado = padNum(0, 12);
+  for (let i = 0; i < 12; i++) line[132 + i] = valorRejeitado[i];
+
+  // ValorCredito [144:156] - zero by default
+  const valorCredito = padNum(0, 12);
+  for (let i = 0; i < 12; i++) line[144 + i] = valorCredito[i];
+
+  // ValorEncargos [156:168] - zero by default
+  const valorEncargos = padNum(0, 12);
+  for (let i = 0; i < 12; i++) line[156 + i] = valorEncargos[i];
 
   const tipoPgto = pad(opts.tipoPgto || 'PF', 2);
   line[168] = tipoPgto[0]; line[169] = tipoPgto[1];
+
+  // NumeroParcela [170:172]
+  const numeroParcela = padNum(opts.numeroParcela ?? 1, 2);
+  line[170] = numeroParcela[0]; line[171] = numeroParcela[1];
+
+  // QuantidadeParcelas [172:174]
+  const quantidadeParcelas = padNum(opts.quantidadeParcelas ?? 3, 2);
+  line[172] = quantidadeParcelas[0]; line[173] = quantidadeParcelas[1];
 
   return line.join('');
 }
@@ -460,7 +511,7 @@ describe('Getnet FileHelper - parseConteudo', () => {
       numRV: '123456789',
       valorBruto: 100000,    // R$ 1000.00
       valorLiquido: 95000,   // R$ 950.00
-      valorTarifa: 5000,     // R$ 50.00
+      valorTaxaDesconto: 5000,     // R$ 50.00
       tipoPgto: 'PF',
     });
     const result = parseConteudo(line);
@@ -474,8 +525,14 @@ describe('Getnet FileHelper - parseConteudo', () => {
     expect(venda.NumeroRV).toBe('123456789');
     expect(venda.ValorBruto).toBe(1000.00);
     expect(venda.ValorLiquido).toBe(950.00);
-    expect(venda.ValorTarifa).toBe(50.00);
+    expect(venda.ValorTaxaDesconto).toBe(50.00);
     expect(venda.TipoPagamento).toBe('PF');
+    expect(venda.Banco).toBe('033');
+    expect(venda.CVsAceitos).toBe(1);
+    expect(venda.CVsRejeitados).toBe(0);
+    expect(venda.NumeroParcela).toBe(1);
+    expect(venda.QuantidadeParcelas).toBe(3);
+    expect(venda.isBrutoDescontado).toBe(false);
   });
 
   test('parses comprovante de vendas (Type 2)', () => {
@@ -691,6 +748,92 @@ describe('Getnet FileHelper - filtrarPorEstabelecimento', () => {
   });
 });
 
+// ============================================================================
+// TESTS - parearManPos (MAN/POS pairing)
+// ============================================================================
+
+describe('Getnet FileHelper - parearManPos', () => {
+  test('corrects MAN bruto from paired POS record', () => {
+    // MAN record: bruto = liquido (descontado), taxa = 0
+    const manLine = buildResumoVendas({
+      codEstab: '000012345678901',
+      bandeira: 'MAN',
+      numRV: '111111111',
+      valorBruto: 9761,      // R$ 97.61 (descontado)
+      valorLiquido: 9761,    // R$ 97.61
+      valorTaxaDesconto: 0,  // 0 = MAN pattern
+      dataPgto: '20022026',
+      tipoPgto: 'LQ',
+    });
+    // POS record: real bruto + tarifa
+    const posLine = buildResumoVendas({
+      codEstab: '000012345678901',
+      bandeira: 'POS',
+      numRV: '222222222',
+      valorBruto: 10000,     // R$ 100.00 (real)
+      valorLiquido: 9761,    // R$ 97.61
+      valorTaxaDesconto: 239, // R$ 2.39
+      dataPgto: '20022026',
+      tipoPgto: 'LQ',
+    });
+
+    const registros = parseConteudo([manLine, posLine].join('\n'));
+    const resumos = registros.filter(r => r.TipoRegistro === 1) as GetnetResumoVendas[];
+
+    const pareados = parearManPos(resumos);
+
+    // Should return only the corrected MAN (POS consumed as pair)
+    expect(pareados).toHaveLength(1);
+    const corrected = pareados[0];
+    expect(corrected.NumeroRV).toBe('111111111'); // MAN's RV
+    expect(corrected.ValorBruto).toBe(100.00);    // Corrected from POS
+    expect(corrected.ValorTaxaDesconto).toBe(2.39); // Corrected from POS
+    expect(corrected.ValorLiquido).toBe(97.61);
+    expect(corrected.isBrutoDescontado).toBe(false);
+  });
+
+  test('keeps MAN without pair marked as isBrutoDescontado', () => {
+    // MAN PF record without POS pair
+    const manLine = buildResumoVendas({
+      bandeira: 'MAN',
+      numRV: '333333333',
+      valorBruto: 29373,
+      valorLiquido: 29373,
+      valorTaxaDesconto: 0,
+      dataPgto: '15032026',
+      tipoPgto: 'PF',
+    });
+
+    const registros = parseConteudo(manLine);
+    const resumos = registros.filter(r => r.TipoRegistro === 1) as GetnetResumoVendas[];
+
+    const pareados = parearManPos(resumos);
+
+    expect(pareados).toHaveLength(1);
+    expect(pareados[0].isBrutoDescontado).toBe(true);
+    expect(pareados[0].ValorBruto).toBe(293.73); // Not corrected
+  });
+
+  test('non-MAN records pass through unchanged', () => {
+    const posLine = buildResumoVendas({
+      bandeira: 'VIS',
+      numRV: '444444444',
+      valorBruto: 10000,
+      valorLiquido: 9761,
+      valorTaxaDesconto: 239,
+      tipoPgto: 'LQ',
+    });
+
+    const registros = parseConteudo(posLine);
+    const resumos = registros.filter(r => r.TipoRegistro === 1) as GetnetResumoVendas[];
+
+    const pareados = parearManPos(resumos);
+
+    expect(pareados).toHaveLength(1);
+    expect(pareados[0].ValorBruto).toBe(100.00);
+    expect(pareados[0].isBrutoDescontado).toBe(false);
+  });
+});
 
 // ============================================================================
 // TESTS - GETNET HEALTH
@@ -869,7 +1012,7 @@ describe('Getnet Capture Handler', () => {
         numRV: '111111111',
         dataRV: '19022026',
         valorBruto: 100000,
-        valorTarifa: 5000,
+        valorTaxaDesconto: 5000,
         tipoPgto: 'PF',
       }),
       buildTrailer({ totalRegistros: 2 }),

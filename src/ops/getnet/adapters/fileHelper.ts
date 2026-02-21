@@ -140,41 +140,68 @@ function parseHeader(linha: string): GetnetHeader {
 /**
  * Parse do Resumo de Vendas (Tipo 1)
  *
- * Layout V10.1 (401 chars):
- * [0:1]     Tipo Registro
- * [1:16]    Cod Estabelecimento (15 chars)
- * [16:18]   Produto (2 chars): EC/SM/SE
- * [18:21]   Bandeira (3 chars): VIS/MAN/POS/ELO
- * [21:30]   Número RV (9 chars)
- * [30:38]   Data RV (DDMMAAAA)
- * [38:46]   Data Pagamento (DDMMAAAA)
- * [46:60]   CNPJ Matriz (14 chars)
- * [60:72]   Quantidade Comprovantes (12 chars)
- * [72:84]   Campo Reservado (12 chars)
- * [84:96]   Valor Bruto (12 chars)
- * [96:108]  Valor Líquido (12 chars)
- * [108:120] Campo Reservado (12 chars)
- * [120:132] Valor Tarifa (12 chars)
- * [168:170] Tipo Pagamento (2 chars): PF/PV/LQ
+ * Layout V10.1 oficial (200 chars) — posições 1-indexed conforme spec Getnet:
+ * Seq  Campo                               Pos(1-idx)  Tam  0-indexed
+ *  1   Tipo Registro                        1- 1         1   [0:1]
+ *  2   Código Estabelecimento               2-16        15   [1:16]
+ *  3   Código do Produto                   17-18         2   [16:18]
+ *  4   Forma de Captura                    19-21         3   [18:21]
+ *  5   Número do RV                        22-30         9   [21:30]
+ *  6   Data do RV                          31-38         8   [30:38]
+ *  7   Data do Pagamento                   39-46         8   [38:46]
+ *  8   Banco                               47-49         3   [46:49]
+ *  9   Agência                             50-55         6   [49:55]
+ * 10   Conta Corrente                      56-66        11   [55:66]
+ * 11   Nº CVs Aceitos                      67-75         9   [66:75]
+ * 12   Nº CVs Rejeitados                   76-84         9   [75:84]
+ * 13   Valor Bruto                         85-96        12   [84:96]
+ * 14   Valor Líquido                       97-108       12   [96:108]
+ * 15   Valor Taxa de Serviço              109-120       12   [108:120]
+ * 16   Valor Taxa de Desconto             121-132       12   [120:132]
+ * 17   Valor Rejeitado                    133-144       12   [132:144]
+ * 18   Valor Crédito                      145-156       12   [144:156]
+ * 19   Valor Encargos                     157-168       12   [156:168]
+ * 20   Tipo Pagamento                     169-170        2   [168:170]
+ * 21   Nº da Parcela                      171-172        2   [170:172]
+ * 22   Qtd de Parcelas                    173-174        2   [172:174]
+ * 23   Cod Estab Centralizador            175-189       15   [174:189]
+ * 24   Reservado                          190-200       11   [189:200]
+ *
+ * IMPORTANTE: registros com Bandeira=MAN sempre têm ValorTaxaDesconto=0
+ * e ValorBruto=ValorLiquido — o "bruto" já está descontado da taxa Getnet.
+ * O bruto REAL vem do registro POS pareado (mesmo ValorLiquido+DataPag).
  */
 function parseResumoVendas(linha: string): GetnetResumoVendas {
+  const bandeira = linha.length > 21 ? linha.substring(18, 21).trim() : '';
+  const valorTaxaDesconto = linha.length > 132 ? parseValor(linha.substring(120, 132)) : 0.0;
+  const valorBruto = linha.length > 96 ? parseValor(linha.substring(84, 96)) : 0.0;
+  const valorLiquido = linha.length > 108 ? parseValor(linha.substring(96, 108)) : 0.0;
+
   return {
     TipoRegistro: 1,
     CodigoEstabelecimento: linha.length > 16 ? linha.substring(1, 16).trim() : 'UNKNOWN',
     Produto: linha.length > 18 ? linha.substring(16, 18).trim() : '',
-    Bandeira: linha.length > 21 ? linha.substring(18, 21).trim() : '',
+    Bandeira: bandeira,
     NumeroRV: linha.length > 30 ? linha.substring(21, 30).trim() : '',
     DataRV: linha.length > 38 ? parseDataDDMMAAAA(linha.substring(30, 38)) : null,
     DataPagamento: linha.length > 46 ? parseDataDDMMAAAA(linha.substring(38, 46)) : null,
-    CNPJMatriz: linha.length > 60 ? linha.substring(46, 60).trim() : '',
-    QuantidadeCV: linha.length > 72 ? parseInt(linha.substring(60, 72).trim() || '0', 10) : 0,
-    ValorBruto: linha.length > 96 ? parseValor(linha.substring(84, 96)) : 0.0,
-    ValorLiquido: linha.length > 108 ? parseValor(linha.substring(96, 108)) : 0.0,
-    ValorTarifa: linha.length > 132 ? parseValor(linha.substring(120, 132)) : 0.0,
+    Banco: linha.length > 49 ? linha.substring(46, 49).trim() : '',
+    Agencia: linha.length > 55 ? linha.substring(49, 55).trim() : '',
+    ContaCorrente: linha.length > 66 ? linha.substring(55, 66).trim() : '',
+    CVsAceitos: linha.length > 75 ? parseInt(linha.substring(66, 75).trim() || '0', 10) : 0,
+    CVsRejeitados: linha.length > 84 ? parseInt(linha.substring(75, 84).trim() || '0', 10) : 0,
+    ValorBruto: valorBruto,
+    ValorLiquido: valorLiquido,
+    ValorTaxaServico: linha.length > 120 ? parseValor(linha.substring(108, 120)) : 0.0,
+    ValorTaxaDesconto: valorTaxaDesconto,
+    ValorRejeitado: linha.length > 144 ? parseValor(linha.substring(132, 144)) : 0.0,
+    ValorCredito: linha.length > 156 ? parseValor(linha.substring(144, 156)) : 0.0,
+    ValorEncargos: linha.length > 168 ? parseValor(linha.substring(156, 168)) : 0.0,
     TipoPagamento: linha.length > 170 ? linha.substring(168, 170).trim() : '',
-    LinhaRaw: linha.substring(0, Math.min(200, linha.length)),
-    _debug_campo72_84: linha.length > 84 ? linha.substring(72, 84) : '',
-    _debug_campo72_84_valor: linha.length > 84 ? parseValor(linha.substring(72, 84)) : 0.0,
+    NumeroParcela: linha.length > 172 ? parseInt(linha.substring(170, 172).trim() || '0', 10) : 0,
+    QuantidadeParcelas: linha.length > 174 ? parseInt(linha.substring(172, 174).trim() || '0', 10) : 0,
+    CodigoEstabelecimentoCentralizador: linha.length > 189 ? linha.substring(174, 189).trim() : '',
+    isBrutoDescontado: bandeira === 'MAN' && valorTaxaDesconto === 0 && valorBruto === valorLiquido,
   };
 }
 
@@ -488,6 +515,67 @@ export function filtrarPorEstabelecimento(
   return dados;
 }
 
+// ============================================================================
+// PAREAMENTO MAN/POS — corrigir ValorBruto descontado em registros MAN
+// ============================================================================
+
+/**
+ * Para cada venda, a Getnet gera DOIS registros Tipo 1:
+ *   - Bandeira POS: ValorBruto = bruto REAL, ValorTaxaDesconto = taxa visível
+ *   - Bandeira MAN: ValorBruto = já descontado da taxa, ValorTaxaDesconto = 0
+ *
+ * Registros MAN são duplicatas com valor líquido disfarçado de bruto.
+ * Esta função pareia MAN com POS (mesmo ValorLiquido + DataPagamento)
+ * e corrige o bruto do MAN com os valores reais do POS.
+ *
+ * Para registros PF (parcela futura) sem POS pareado, mantém o MAN como está
+ * mas marca isBrutoDescontado=true.
+ */
+export function parearManPos(resumos: GetnetResumoVendas[]): GetnetResumoVendas[] {
+  // Separar POS e MAN
+  const posRecords = resumos.filter(r => r.Bandeira !== 'MAN');
+  const manRecords = resumos.filter(r => r.Bandeira === 'MAN');
+
+  // Índice POS por chave ValorLiquido+DataPagamento (para match com MAN)
+  const posIndex = new Map<string, GetnetResumoVendas>();
+  for (const pos of posRecords) {
+    const key = `${pos.ValorLiquido.toFixed(2)}|${pos.DataPagamento}`;
+    posIndex.set(key, pos);
+  }
+
+  // Marcar POS records que foram usados como par
+  const usedPosRVs = new Set<string>();
+
+  // Corrigir MAN records usando POS pareado
+  const correctedMan: GetnetResumoVendas[] = [];
+  for (const man of manRecords) {
+    if (!man.isBrutoDescontado) {
+      correctedMan.push(man);
+      continue;
+    }
+
+    const key = `${man.ValorLiquido.toFixed(2)}|${man.DataPagamento}`;
+    const pos = posIndex.get(key);
+
+    if (pos && !usedPosRVs.has(pos.NumeroRV)) {
+      // Pareou: corrigir MAN com valores reais do POS
+      usedPosRVs.add(pos.NumeroRV);
+      correctedMan.push({
+        ...man,
+        ValorBruto: pos.ValorBruto,
+        ValorTaxaDesconto: pos.ValorTaxaDesconto,
+        isBrutoDescontado: false,
+      });
+    } else {
+      // Sem par POS — manter MAN como está (PF sem POS disponível)
+      correctedMan.push(man);
+    }
+  }
+
+  // Retornar MAN corrigidos + POS não pareados (evitar duplicata)
+  const posNaoUsados = posRecords.filter(r => !usedPosRVs.has(r.NumeroRV));
+  return [...correctedMan, ...posNaoUsados];
+}
 
 // ============================================================================
 // FUNÇÕES AUXILIARES DE PARSE

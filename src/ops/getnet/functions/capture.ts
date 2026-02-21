@@ -21,7 +21,7 @@
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/functions';
 import * as crypto from 'crypto';
 import { getGetnetClient } from '../adapters/client';
-import { parseConteudo } from '../adapters/fileHelper';
+import { parseConteudo, parearManPos } from '../adapters/fileHelper';
 import {
   CaptureRequest,
   CaptureResponse,
@@ -83,7 +83,7 @@ function vendaToReceber(
       tipo_pagamento: venda.TipoPagamento,
       valor_bruto: venda.ValorBruto,
       valor_liquido: venda.ValorLiquido,
-      valor_tarifa: venda.ValorTarifa,
+      valor_tarifa: venda.ValorTaxaDesconto,
       data_rv: venda.DataRV,
       data_movimento: dataMovimento,
     },
@@ -106,8 +106,8 @@ function vendaToPagar(
     type: TransactionType.PAGAR,
     status: TransactionStatus.CAPTURADO,
     source: TransactionSource.GETNET,
-    valor: venda.ValorTarifa,
-    valorOriginal: venda.ValorTarifa,
+    valor: venda.ValorTaxaDesconto,
+    valorOriginal: venda.ValorTaxaDesconto,
     dataVencimento: venda.DataPagamento || dataMovimento,
     descricao: `Taxa cartão ${venda.Produto}/${venda.Bandeira} - RV ${venda.NumeroRV}`,
     descricaoOriginal: `Taxa cartão ${venda.Produto}/${venda.Bandeira} - RV ${venda.NumeroRV}`,
@@ -166,7 +166,7 @@ function vendaToVendaCartao(
       numero_rv: venda.NumeroRV,
       valor_bruto: venda.ValorBruto,
       valor_liquido: venda.ValorLiquido,
-      valor_taxa: venda.ValorTarifa,
+      valor_taxa: venda.ValorTaxaDesconto,
       data_pagamento: venda.DataPagamento,
       data_rv: venda.DataRV,
       data_movimento: dataMovimento,
@@ -432,7 +432,15 @@ function filtrarResumosVendas(
 
   logger.info(`Resumos: DÉBITO ${resumosDebito.length} -> ${debitoProcessados.length} | CRÉDITO ${resumosCredito.length} -> ${creditoProcessados.length}`);
 
-  return [...debitoProcessados, ...creditoProcessados];
+  // Parear MAN/POS para corrigir ValorBruto descontado
+  const filtrados = [...debitoProcessados, ...creditoProcessados];
+  const pareados = parearManPos(filtrados);
+
+  const corrigidos = pareados.filter(r => !r.isBrutoDescontado).length;
+  const pendentes = pareados.filter(r => r.isBrutoDescontado).length;
+  logger.info(`MAN/POS pairing: ${corrigidos} corrigidos, ${pendentes} sem par POS (bruto descontado)`);
+
+  return pareados;
 }
 
 // ============================================================================
@@ -458,7 +466,7 @@ function gerarTransacoes(
     transactions.push(vendaToReceber(venda, clientId, cycleId, dataMovimento));
     totalReceber++;
 
-    if (venda.ValorTarifa > 0) {
+    if (venda.ValorTaxaDesconto > 0) {
       transactions.push(vendaToPagar(venda, clientId, cycleId, dataMovimento));
       totalPagar++;
     }
@@ -532,7 +540,7 @@ function gerarTransacoes(
   // Resumo com valores BRUTOS (fonte de verdade — líquidos se calculam)
   const resumoBruto = {
     vendas_bruto: resumosVendas.reduce((s, v) => s + v.ValorBruto, 0),
-    taxa_getnet: resumosVendas.reduce((s, v) => s + v.ValorTarifa, 0),
+    taxa_getnet: resumosVendas.reduce((s, v) => s + v.ValorTaxaDesconto, 0),
     ajustes_bruto: ajustes.reduce((s, a) => s + (a.SinalTransacao === '-' ? -a.ValorAjuste : a.ValorAjuste), 0),
     antecipacoes_bruto: antecipacoes.reduce((s, a) => s + a.ValorBrutoAntecipacao, 0),
     cessoes_bruto: cessoes.reduce((s, c) => s + c.ValorBrutoCessao, 0),
