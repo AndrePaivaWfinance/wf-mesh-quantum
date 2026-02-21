@@ -1046,6 +1046,144 @@ describe('Getnet Capture Handler', () => {
     expect(result.jsonBody.transactions).toBeDefined();
     expect(result.jsonBody.durationMs).toBeDefined();
   });
+
+  test('capture creates COMPROVANTE transactions linked to VENDA_CARTAO for traceability', async () => {
+    // RV com 2 comprovantes (2 transações individuais no mesmo resumo de vendas)
+    const fileContent = [
+      buildHeader(),
+      buildResumoVendas({
+        numRV: '111111111',
+        dataRV: '19022026',
+        valorBruto: 40000,     // R$ 400.00
+        valorLiquido: 38000,   // R$ 380.00
+        valorTaxaDesconto: 2000, // R$ 20.00
+        tipoPgto: 'PF',
+      }),
+      buildComprovanteVendas({
+        numRV: '111111111',
+        nsu: '000000000042',
+        valorTransacao: 20000,   // R$ 200.00 (valor faturamento tx 1)
+        valorParcela: 6667,      // R$ 66.67
+      }),
+      buildComprovanteVendas({
+        numRV: '111111111',
+        nsu: '000000000043',
+        valorTransacao: 20000,   // R$ 200.00 (valor faturamento tx 2)
+        valorParcela: 6667,
+      }),
+      buildTrailer({ totalRegistros: 4 }),
+    ].join('\n');
+
+    mockBuscarArquivoPorData.mockResolvedValueOnce({
+      erro: false,
+      mensagem: 'OK',
+      arquivo: 'getnetextr_20260220.txt',
+      conteudo: fileContent,
+      totalLinhas: 5,
+      tamanhoBytes: fileContent.length,
+    });
+
+    const handler = registeredRoutes['getnet-capture'].handler;
+    const req = {
+      json: async () => ({
+        clientId: 'client-1',
+        cycleId: 'cycle-1',
+        startDate: '2026-02-20',
+        action: 'listar',
+      }),
+    };
+
+    const result = await handler(req, { functionName: 'getnet-capture', invocationId: 'test' });
+
+    expect(result.status).toBe(200);
+    expect(result.jsonBody.success).toBe(true);
+
+    const txs = result.jsonBody.transactions as any[];
+
+    // Deve ter: RECEBER + PAGAR + VENDA_CARTAO + 2x COMPROVANTE = 5
+    const vendaCartao = txs.find((t: any) => t.type === 'venda_cartao');
+    const comprovantes = txs.filter((t: any) => t.type === 'comprovante');
+
+    expect(vendaCartao).toBeDefined();
+    expect(comprovantes).toHaveLength(2);
+
+    // VENDA_CARTAO enriquecida com valor de faturamento dos comprovantes
+    expect(vendaCartao.metadata.valor_faturamento).toBe(400.00); // 200 + 200
+    expect(vendaCartao.metadata.qtd_comprovantes).toBe(2);
+    expect(vendaCartao.metadata.comprovantes).toHaveLength(2);
+    expect(vendaCartao.metadata.comprovantes[0].nsu).toBe('000000000042');
+    expect(vendaCartao.metadata.comprovantes[0].valor_faturamento).toBe(200.00);
+    expect(vendaCartao.metadata.comprovantes[0].parcela_atual).toBe('01');
+    expect(vendaCartao.metadata.comprovantes[0].total_parcelas).toBe('03');
+    expect(vendaCartao.metadata.comprovantes[0].valor_parcela).toBe(66.67);
+
+    // COMPROVANTEs vinculados ao VENDA_CARTAO (rastreabilidade)
+    for (const cv of comprovantes) {
+      expect(cv.vinculadoA).toBe(vendaCartao.id);
+      expect(cv.vinculacaoTipo).toBe('automatico');
+      expect(cv.type).toBe('comprovante');
+      expect(cv.valor).toBe(200.00); // ValorTransacao = valor faturamento
+      expect(cv.numeroDocumento).toBeDefined(); // NSU como documento de referência
+      expect(cv.metadata.parcela_atual).toBe('01');
+      expect(cv.metadata.total_parcelas).toBe('03');
+      expect(cv.metadata.valor_parcela).toBe(66.67);
+      expect(cv.metadata.data_transacao).toBeDefined();
+      expect(cv.metadata.data_pagamento).toBeDefined();
+    }
+
+    // Resumo inclui faturamento total dos comprovantes
+    expect(result.jsonBody.resumo.vendas_faturamento).toBe(400.00);
+    expect(result.jsonBody.resumo.comprovantes_total).toBe(2);
+  });
+
+  test('capture works without comprovantes (Type 2 optional)', async () => {
+    // RV sem comprovantes — deve funcionar normalmente
+    const fileContent = [
+      buildHeader(),
+      buildResumoVendas({
+        numRV: '222222222',
+        dataRV: '19022026',
+        valorBruto: 50000,
+        valorTaxaDesconto: 2500,
+        tipoPgto: 'PF',
+      }),
+      buildTrailer({ totalRegistros: 2 }),
+    ].join('\n');
+
+    mockBuscarArquivoPorData.mockResolvedValueOnce({
+      erro: false,
+      mensagem: 'OK',
+      arquivo: 'getnetextr_20260220.txt',
+      conteudo: fileContent,
+      totalLinhas: 3,
+      tamanhoBytes: fileContent.length,
+    });
+
+    const handler = registeredRoutes['getnet-capture'].handler;
+    const req = {
+      json: async () => ({
+        clientId: 'client-1',
+        cycleId: 'cycle-1',
+        startDate: '2026-02-20',
+        action: 'listar',
+      }),
+    };
+
+    const result = await handler(req, { functionName: 'getnet-capture', invocationId: 'test' });
+
+    expect(result.status).toBe(200);
+    const txs = result.jsonBody.transactions as any[];
+
+    const vendaCartao = txs.find((t: any) => t.type === 'venda_cartao');
+    const comprovantes = txs.filter((t: any) => t.type === 'comprovante');
+
+    expect(vendaCartao).toBeDefined();
+    expect(comprovantes).toHaveLength(0);
+
+    // Sem comprovantes, valor_faturamento = ValorBruto (fallback)
+    expect(vendaCartao.metadata.valor_faturamento).toBe(500.00);
+    expect(vendaCartao.metadata.qtd_comprovantes).toBe(0);
+  });
 });
 
 // ============================================================================

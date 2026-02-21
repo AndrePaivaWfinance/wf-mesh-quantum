@@ -27,6 +27,7 @@ import {
   CaptureResponse,
   GetnetRegistro,
   GetnetResumoVendas,
+  GetnetComprovanteVendas,
   GetnetAjusteFinanceiro,
   GetnetAntecipacao,
   GetnetNegociacaoCessao,
@@ -139,9 +140,29 @@ function vendaToVendaCartao(
   venda: GetnetResumoVendas,
   clientId: string,
   cycleId: string,
-  dataMovimento: string
+  dataMovimento: string,
+  comprovantes?: GetnetComprovanteVendas[]
 ): Transaction {
   const sourceId = `getnet-venda-${venda.NumeroRV}-${venda.Produto}-${venda.Bandeira}`;
+
+  // Calcular valor de faturamento e parcelas a partir dos comprovantes (Tipo 2)
+  const valorFaturamento = comprovantes && comprovantes.length > 0
+    ? comprovantes.reduce((sum, cv) => sum + cv.ValorTransacao, 0)
+    : venda.ValorBruto;
+
+  const comprovantesRef = comprovantes?.map(cv => ({
+    nsu: cv.NSU,
+    valor_faturamento: cv.ValorTransacao,
+    parcela_atual: cv.Parcela,
+    total_parcelas: cv.TotalParcelas,
+    valor_parcela: cv.ValorParcela,
+    data_transacao: cv.DataTransacao,
+    data_pagamento: cv.DataPagamento,
+    numero_cartao: cv.NumeroCartao,
+    codigo_autorizacao: cv.CodigoAutorizacao,
+    bandeira: cv.Bandeira,
+  }));
+
   return {
     id: `getnet-venda-${shortHash(sourceId)}`,
     clientId,
@@ -167,8 +188,69 @@ function vendaToVendaCartao(
       valor_bruto: venda.ValorBruto,
       valor_liquido: venda.ValorLiquido,
       valor_taxa: venda.ValorTaxaDesconto,
+      valor_faturamento: valorFaturamento,
       data_pagamento: venda.DataPagamento,
       data_rv: venda.DataRV,
+      data_movimento: dataMovimento,
+      qtd_comprovantes: comprovantes?.length ?? 0,
+      comprovantes: comprovantesRef,
+    },
+  } as any;
+}
+
+/**
+ * Converte comprovante de vendas (Tipo 2) em transação COMPROVANTE (documento de referência)
+ *
+ * O comprovante é o registro individual de cada transação no cartão.
+ * Carrega o valor de faturamento (ValorTransacao) e dados de parcelamento.
+ * Vinculado ao VENDA_CARTAO do mesmo RV.
+ */
+function comprovanteToTransaction(
+  comprovante: GetnetComprovanteVendas,
+  clientId: string,
+  cycleId: string,
+  dataMovimento: string,
+  vendaCartaoId?: string
+): Transaction {
+  const sourceId = `getnet-cv-${comprovante.NumeroRV}-${comprovante.NSU}`;
+  return {
+    id: `getnet-cv-${shortHash(sourceId)}`,
+    clientId,
+    type: TransactionType.COMPROVANTE,
+    status: TransactionStatus.CAPTURADO,
+    source: TransactionSource.GETNET,
+    valor: comprovante.ValorTransacao,
+    valorOriginal: comprovante.ValorTransacao,
+    dataVencimento: comprovante.DataPagamento || dataMovimento,
+    dataEmissao: comprovante.DataTransacao || dataMovimento,
+    descricao: `Comprovante ${comprovante.NSU} - RV ${comprovante.NumeroRV} - ${comprovante.Bandeira}`,
+    descricaoOriginal: `Comprovante ${comprovante.NSU} - RV ${comprovante.NumeroRV} - ${comprovante.Bandeira}`,
+    contraparte: `Getnet - ${comprovante.Bandeira}`,
+    numeroDocumento: comprovante.NSU,
+    sourceId,
+    sourceName: 'getnet',
+    vinculadoA: vendaCartaoId,
+    vinculacaoTipo: vendaCartaoId ? 'automatico' : undefined,
+    rawData: JSON.parse(JSON.stringify(comprovante)),
+    createdAt: nowISO(),
+    updatedAt: nowISO(),
+    capturedAt: nowISO(),
+    cycleId,
+    metadata: {
+      tipo_registro: 'comprovante_venda',
+      numero_rv: comprovante.NumeroRV,
+      nsu: comprovante.NSU,
+      bandeira: comprovante.Bandeira,
+      codigo_estabelecimento: comprovante.CodigoEstabelecimento,
+      codigo_autorizacao: comprovante.CodigoAutorizacao,
+      numero_cartao: comprovante.NumeroCartao,
+      valor_faturamento: comprovante.ValorTransacao,
+      parcela_atual: comprovante.Parcela,
+      total_parcelas: comprovante.TotalParcelas,
+      valor_parcela: comprovante.ValorParcela,
+      data_transacao: comprovante.DataTransacao,
+      hora_transacao: comprovante.HoraTransacao,
+      data_pagamento: comprovante.DataPagamento,
       data_movimento: dataMovimento,
     },
   } as any;
@@ -462,7 +544,23 @@ function gerarTransacoes(
   // Processar RESUMOS DE VENDAS (Tipo 1)
   const resumosVendas = filtrarResumosVendas(registros, dataMovimento, codigoEstabelecimento);
 
+  // Indexar COMPROVANTES (Tipo 2) por NumeroRV para vincular como documento de referência
+  let comprovantes = registros.filter(r => r.TipoRegistro === 2) as GetnetComprovanteVendas[];
+  if (codigoEstabelecimento) {
+    comprovantes = comprovantes.filter(r => r.CodigoEstabelecimento.trim() === codigoEstabelecimento);
+  }
+  const comprovantesPorRV = new Map<string, GetnetComprovanteVendas[]>();
+  for (const cv of comprovantes) {
+    const rv = cv.NumeroRV;
+    if (!comprovantesPorRV.has(rv)) comprovantesPorRV.set(rv, []);
+    comprovantesPorRV.get(rv)!.push(cv);
+  }
+
+  logger.info(`Comprovantes (Tipo 2): ${comprovantes.length} registros indexados por ${comprovantesPorRV.size} RVs`);
+
   for (const venda of resumosVendas) {
+    const cvsDaVenda = comprovantesPorRV.get(venda.NumeroRV);
+
     transactions.push(vendaToReceber(venda, clientId, cycleId, dataMovimento));
     totalReceber++;
 
@@ -471,8 +569,17 @@ function gerarTransacoes(
       totalPagar++;
     }
 
-    transactions.push(vendaToVendaCartao(venda, clientId, cycleId, dataMovimento));
+    // VENDA_CARTAO enriquecida com valor de faturamento e parcelas dos comprovantes
+    const vendaCartao = vendaToVendaCartao(venda, clientId, cycleId, dataMovimento, cvsDaVenda);
+    transactions.push(vendaCartao);
     totalVendas++;
+
+    // Criar transações COMPROVANTE (documento de referência) vinculadas à venda
+    if (cvsDaVenda) {
+      for (const cv of cvsDaVenda) {
+        transactions.push(comprovanteToTransaction(cv, clientId, cycleId, dataMovimento, vendaCartao.id));
+      }
+    }
   }
 
   // Processar AJUSTES FINANCEIROS (Tipo 3) - excluir RVs já liquidados
@@ -540,7 +647,9 @@ function gerarTransacoes(
   // Resumo com valores BRUTOS (fonte de verdade — líquidos se calculam)
   const resumoBruto = {
     vendas_bruto: resumosVendas.reduce((s, v) => s + v.ValorBruto, 0),
+    vendas_faturamento: comprovantes.reduce((s, cv) => s + cv.ValorTransacao, 0),
     taxa_getnet: resumosVendas.reduce((s, v) => s + v.ValorTaxaDesconto, 0),
+    comprovantes_total: comprovantes.length,
     ajustes_bruto: ajustes.reduce((s, a) => s + (a.SinalTransacao === '-' ? -a.ValorAjuste : a.ValorAjuste), 0),
     antecipacoes_bruto: antecipacoes.reduce((s, a) => s + a.ValorBrutoAntecipacao, 0),
     cessoes_bruto: cessoes.reduce((s, c) => s + c.ValorBrutoCessao, 0),
