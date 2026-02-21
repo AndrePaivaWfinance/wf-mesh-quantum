@@ -6,11 +6,13 @@
 
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/functions';
 import * as crypto from 'crypto';
-import { getSantanderClient } from '../adapters/client';
+import { getSantanderClient, getSantanderClientForTenant } from '../adapters/client';
 import { CaptureRequest, CaptureResponse, SantanderDDA, SantanderPIX, SantanderBoleto, SantanderComprovante } from '../adapters/types';
 import { createLogger, nowISO } from '../shared/utils';
 import { getExistingSourceIds, upsertTransactionsIdempotent, updateTransaction } from '../../../storage/tableClient';
 import { Transaction, TransactionType, TransactionSource, TransactionStatus } from '../../../types';
+import { getClientById } from '../../shared/storage/clientStorage';
+import { resolveSantanderCredentials } from '../../../infra/credentialResolver';
 
 const logger = createLogger('SantanderCapture');
 
@@ -128,7 +130,17 @@ app.http('santander-capture', {
           return d.toISOString().split('T')[0];
         })();
 
-      const client = getSantanderClient();
+      // Per-client credentials: resolve from ClientConfig, fallback to env vars
+      let client;
+      const clientData = await getClientById(clientId);
+      if (clientData?.config?.banco === 'santander' && clientData?.config?.bancoAgencia) {
+        const creds = resolveSantanderCredentials(clientData.config);
+        client = getSantanderClientForTenant(creds);
+        logger.info('Using per-client Santander credentials', { clientId });
+      } else {
+        client = getSantanderClient();
+        logger.info('Using global Santander credentials (env vars)', { clientId });
+      }
 
       // Buscar transações existentes para idempotência
       const existingSourceIds = await getExistingSourceIds(clientId, 'santander');

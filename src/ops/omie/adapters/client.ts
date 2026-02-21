@@ -330,6 +330,10 @@ export class OmieClient {
 
 let clientInstance: OmieClient | null = null;
 
+/**
+ * Retorna singleton do OmieClient (env vars globais).
+ * Para multi-tenant, use getOmieClientForTenant().
+ */
 export function getOmieClient(): OmieClient {
   if (!clientInstance) {
     const appKey = process.env.OMIE_APP_KEY;
@@ -340,6 +344,17 @@ export function getOmieClient(): OmieClient {
     clientInstance = new OmieClient(appKey, appSecret);
   }
   return clientInstance;
+}
+
+/**
+ * Cria OmieClient a partir de credenciais per-client.
+ * NÃO usa singleton — cada cliente tem suas próprias credenciais.
+ */
+export function getOmieClientForTenant(appKey: string, appSecret: string): OmieClient {
+  if (!appKey || !appSecret) {
+    throw new Error('Omie appKey and appSecret are required');
+  }
+  return new OmieClient(appKey, appSecret);
 }
 
 export function resetOmieClient(): void {
