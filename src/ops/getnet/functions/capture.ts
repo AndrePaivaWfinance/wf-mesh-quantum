@@ -542,29 +542,31 @@ function filtrarResumosVendas(
 }
 
 // ============================================================================
-// GERAÇÃO UNIFICADA DE TRANSAÇÕES (usada por listar e ingerir)
+// FUNÇÕES FOCADAS — cada uma recebe só os tipos que precisa
 // ============================================================================
 
-function gerarTransacoes(
-  registros: GetnetRegistro[],
+/**
+ * Função 1: Processa FATURAMENTO (Tipo 1 + Tipo 2)
+ *
+ * Recebe resumos de vendas e comprovantes, gera:
+ * - RECEBER (valor bruto da venda)
+ * - PAGAR (taxa da maquineta)
+ * - VENDA_CARTAO (informativo com comprovantes embutidos)
+ * - COMPROVANTE (documento individual com taxa proporcional)
+ */
+function processarFaturamento(
+  resumosVendas: GetnetResumoVendas[],
+  comprovantes: GetnetComprovanteVendas[],
   clientId: string,
   cycleId: string,
-  dataMovimento: string,
-  codigoEstabelecimento?: string
+  dataMovimento: string
 ) {
   const transactions: Transaction[] = [];
   let totalReceber = 0;
   let totalPagar = 0;
   let totalVendas = 0;
 
-  // Processar RESUMOS DE VENDAS (Tipo 1)
-  const resumosVendas = filtrarResumosVendas(registros, dataMovimento, codigoEstabelecimento);
-
-  // Indexar COMPROVANTES (Tipo 2) por NumeroRV para vincular como documento de referência
-  let comprovantes = registros.filter(r => r.TipoRegistro === 2) as GetnetComprovanteVendas[];
-  if (codigoEstabelecimento) {
-    comprovantes = comprovantes.filter(r => r.CodigoEstabelecimento.trim() === codigoEstabelecimento);
-  }
+  // Indexar comprovantes por NumeroRV
   const comprovantesPorRV = new Map<string, GetnetComprovanteVendas[]>();
   for (const cv of comprovantes) {
     const rv = cv.NumeroRV;
@@ -585,13 +587,11 @@ function gerarTransacoes(
       totalPagar++;
     }
 
-    // VENDA_CARTAO enriquecida com valor de faturamento e parcelas dos comprovantes
     const vendaCartao = vendaToVendaCartao(venda, clientId, cycleId, dataMovimento, cvsDaVenda);
     transactions.push(vendaCartao);
     totalVendas++;
 
-    // Criar transações COMPROVANTE (documento de referência) vinculadas à venda
-    // Taxa proporcional: rateio da ValorTaxaDesconto do RV pelo peso de cada CV
+    // COMPROVANTE com taxa proporcional rateada do RV
     if (cvsDaVenda) {
       for (const cv of cvsDaVenda) {
         const peso = venda.ValorBruto > 0 ? cv.ValorTransacao / venda.ValorBruto : 0;
@@ -601,22 +601,24 @@ function gerarTransacoes(
     }
   }
 
-  // Processar AJUSTES FINANCEIROS (Tipo 3) - excluir RVs já liquidados
-  const rvsLiquidados = new Set<string>();
-  for (const r of registros) {
-    if (r.TipoRegistro === 1 && (r as GetnetResumoVendas).TipoPagamento === 'LQ') {
-      const rv = (r as GetnetResumoVendas).NumeroRV;
-      if (rv) rvsLiquidados.add(rv);
-    }
-  }
+  return { transactions, totalReceber, totalPagar, totalVendas };
+}
 
-  let ajustes = registros.filter(r => r.TipoRegistro === 3) as GetnetAjusteFinanceiro[];
-  if (codigoEstabelecimento) {
-    ajustes = ajustes.filter(r => r.CodigoEstabelecimento.trim() === codigoEstabelecimento);
-  }
-  ajustes = ajustes.filter(r => !rvsLiquidados.has(r.NumeroRV));
+/**
+ * Função 2: Processa AJUSTES (Tipo 3)
+ *
+ * Recebe ajustes financeiros (já filtrados de RVs liquidados), gera RECEBER ou PAGAR.
+ */
+function processarAjustes(
+  ajustes: GetnetAjusteFinanceiro[],
+  clientId: string,
+  cycleId: string,
+  dataMovimento: string
+) {
+  const transactions: Transaction[] = [];
+  let totalReceber = 0;
+  let totalPagar = 0;
 
-  logger.info(`Processando ${ajustes.length} ajustes financeiros`);
   for (const ajuste of ajustes) {
     const tx = ajusteToTransaction(ajuste, clientId, cycleId, dataMovimento);
     transactions.push(tx);
@@ -624,13 +626,31 @@ function gerarTransacoes(
     else totalReceber++;
   }
 
-  // Processar ANTECIPAÇÕES (Tipo 4)
-  let antecipacoes = registros.filter(r => r.TipoRegistro === 4) as GetnetAntecipacao[];
-  if (codigoEstabelecimento) {
-    antecipacoes = antecipacoes.filter(r => r.CodigoEstabelecimento.trim() === codigoEstabelecimento);
-  }
+  return { transactions, totalReceber, totalPagar };
+}
 
-  logger.info(`Processando ${antecipacoes.length} antecipações`);
+/**
+ * Função 3: Enriquece COMPROVANTEs com antecipação (Tipo 4) e cessão (Tipo 5)
+ *
+ * Recebe as transações já geradas + registros Tipo 4/5 do mesmo arquivo.
+ * Cruza por DataPagamento + CodigoEstabelecimento + Bandeira e rateia
+ * proporcionalmente a taxa de antecipação/cessão em cada comprovante.
+ *
+ * Também gera as transações RECEBER/PAGAR de antecipação e cessão.
+ */
+function processarEEnriquecerAntecipacoesCessoes(
+  transacoesExistentes: Transaction[],
+  antecipacoes: GetnetAntecipacao[],
+  cessoes: GetnetNegociacaoCessao[],
+  clientId: string,
+  cycleId: string,
+  dataMovimento: string
+) {
+  const transactions: Transaction[] = [];
+  let totalReceber = 0;
+  let totalPagar = 0;
+
+  // Gerar transações RECEBER/PAGAR de antecipação
   for (const antecipacao of antecipacoes) {
     const txs = antecipacaoToTransactions(antecipacao, clientId, cycleId, dataMovimento);
     for (const tx of txs) {
@@ -640,14 +660,7 @@ function gerarTransacoes(
     }
   }
 
-  // Processar CESSÕES (Tipo 5) - apenas CS
-  let cessoes = registros.filter(r => r.TipoRegistro === 5) as GetnetNegociacaoCessao[];
-  if (codigoEstabelecimento) {
-    cessoes = cessoes.filter(r => r.CodigoEstabelecimento.trim() === codigoEstabelecimento);
-  }
-  cessoes = cessoes.filter(r => r.Indicador === 'CS');
-
-  logger.info(`Processando ${cessoes.length} cessões CS`);
+  // Gerar transações RECEBER/PAGAR de cessão
   for (const cessao of cessoes) {
     const txs = cessaoToTransactions(cessao, clientId, cycleId, dataMovimento);
     for (const tx of txs) {
@@ -656,6 +669,171 @@ function gerarTransacoes(
       else totalReceber++;
     }
   }
+
+  // =========================================================================
+  // ENRIQUECIMENTO — cruzar Tipo 4/5 com COMPROVANTEs existentes
+  // =========================================================================
+  const comprovanteTxs = transacoesExistentes.filter(t => t.type === TransactionType.COMPROVANTE);
+  if (comprovanteTxs.length === 0 || (antecipacoes.length === 0 && cessoes.length === 0)) {
+    return { transactions, totalReceber, totalPagar, enriquecidos: { antecipacao: 0, cessao: 0 } };
+  }
+
+  // Indexar COMPROVANTEs por chave: DataPagamento|CodigoEstabelecimento|Bandeira
+  const cvPorChave = new Map<string, Transaction[]>();
+  for (const tx of comprovanteTxs) {
+    const meta = (tx as any).metadata;
+    const chave = `${meta.data_pagamento}|${meta.codigo_estabelecimento?.trim()}|${meta.bandeira}`;
+    if (!cvPorChave.has(chave)) cvPorChave.set(chave, []);
+    cvPorChave.get(chave)!.push(tx);
+  }
+
+  // Enriquecer com antecipação (Tipo 4)
+  let enriquecidosAntecipacao = 0;
+  for (const antecipacao of antecipacoes) {
+    const chave = `${antecipacao.DataOriginalPagamento}|${antecipacao.CodigoEstabelecimento.trim()}|${antecipacao.Bandeira}`;
+    const cvsCasados = cvPorChave.get(chave);
+    if (!cvsCasados || cvsCasados.length === 0) continue;
+
+    const totalValorCVs = cvsCasados.reduce((s, t) => s + t.valor, 0);
+    if (totalValorCVs === 0) continue;
+
+    for (const tx of cvsCasados) {
+      const meta = (tx as any).metadata;
+      const peso = tx.valor / totalValorCVs;
+      const taxaAntecipacaoRateada = Math.round(antecipacao.TaxaAntecipacao * peso * 100) / 100;
+      const valorLiquidoAntecipado = Math.round((tx.valor - (meta.taxa_proporcional || 0) - taxaAntecipacaoRateada) * 100) / 100;
+
+      meta.antecipacao = {
+        numero_operacao: antecipacao.NumeroOperacao,
+        data_antecipacao: antecipacao.DataAntecipacao,
+        data_original_pagamento: antecipacao.DataOriginalPagamento,
+        taxa_antecipacao_proporcional: taxaAntecipacaoRateada,
+        valor_liquido_antecipado: valorLiquidoAntecipado,
+      };
+      enriquecidosAntecipacao++;
+    }
+  }
+
+  // Enriquecer com cessão (Tipo 5)
+  let enriquecidosCessao = 0;
+  for (const cessao of cessoes) {
+    // Cessão não tem Bandeira — buscar por DataPagamento + Estabelecimento (qualquer bandeira)
+    for (const [k, cvsCasados] of cvPorChave.entries()) {
+      const [dataPgto, codEstab] = k.split('|');
+      if (dataPgto !== cessao.DataPagamento || codEstab !== cessao.CodigoEstabelecimento.trim()) continue;
+
+      const totalValorCVs = cvsCasados.reduce((s, t) => s + t.valor, 0);
+      if (totalValorCVs === 0) continue;
+
+      for (const tx of cvsCasados) {
+        const meta = (tx as any).metadata;
+        const peso = tx.valor / totalValorCVs;
+        const taxaCessaoRateada = Math.round(cessao.ValorTaxaCessao * peso * 100) / 100;
+        const valorLiquidoCedido = Math.round((tx.valor - (meta.taxa_proporcional || 0) - taxaCessaoRateada) * 100) / 100;
+
+        meta.cessao = {
+          numero_operacao: cessao.NumeroOperacao,
+          data_cessao: cessao.DataCessao,
+          data_pagamento_original: cessao.DataPagamento,
+          taxa_cessao_proporcional: taxaCessaoRateada,
+          valor_liquido_cedido: valorLiquidoCedido,
+        };
+        enriquecidosCessao++;
+      }
+    }
+  }
+
+  // Propagar enriquecimento para o array comprovantes[] do VENDA_CARTAO
+  if (enriquecidosAntecipacao > 0 || enriquecidosCessao > 0) {
+    const vendaCartaoTxs = transacoesExistentes.filter(t => t.type === TransactionType.VENDA_CARTAO);
+    for (const vc of vendaCartaoTxs) {
+      const meta = (vc as any).metadata;
+      if (!meta.comprovantes) continue;
+      for (const cvRef of meta.comprovantes) {
+        const cvTx = comprovanteTxs.find(t => (t as any).metadata.nsu === cvRef.nsu);
+        if (!cvTx) continue;
+        const cvMeta = (cvTx as any).metadata;
+        if (cvMeta.antecipacao) cvRef.antecipacao = cvMeta.antecipacao;
+        if (cvMeta.cessao) cvRef.cessao = cvMeta.cessao;
+      }
+    }
+    logger.info(`Enriquecimento: ${enriquecidosAntecipacao} CVs com antecipação, ${enriquecidosCessao} CVs com cessão`);
+  }
+
+  return {
+    transactions,
+    totalReceber,
+    totalPagar,
+    enriquecidos: { antecipacao: enriquecidosAntecipacao, cessao: enriquecidosCessao },
+  };
+}
+
+// ============================================================================
+// ORQUESTRADOR — filtra por tipo e delega para cada função focada
+// ============================================================================
+
+function gerarTransacoes(
+  registros: GetnetRegistro[],
+  clientId: string,
+  cycleId: string,
+  dataMovimento: string,
+  codigoEstabelecimento?: string
+) {
+  // Separar registros por tipo
+  const resumosVendas = filtrarResumosVendas(registros, dataMovimento, codigoEstabelecimento);
+
+  let comprovantes = registros.filter(r => r.TipoRegistro === 2) as GetnetComprovanteVendas[];
+  if (codigoEstabelecimento) {
+    comprovantes = comprovantes.filter(r => r.CodigoEstabelecimento.trim() === codigoEstabelecimento);
+  }
+
+  const rvsLiquidados = new Set<string>();
+  for (const r of registros) {
+    if (r.TipoRegistro === 1 && (r as GetnetResumoVendas).TipoPagamento === 'LQ') {
+      const rv = (r as GetnetResumoVendas).NumeroRV;
+      if (rv) rvsLiquidados.add(rv);
+    }
+  }
+  let ajustes = registros.filter(r => r.TipoRegistro === 3) as GetnetAjusteFinanceiro[];
+  if (codigoEstabelecimento) {
+    ajustes = ajustes.filter(r => r.CodigoEstabelecimento.trim() === codigoEstabelecimento);
+  }
+  ajustes = ajustes.filter(r => !rvsLiquidados.has(r.NumeroRV));
+
+  let antecipacoes = registros.filter(r => r.TipoRegistro === 4) as GetnetAntecipacao[];
+  if (codigoEstabelecimento) {
+    antecipacoes = antecipacoes.filter(r => r.CodigoEstabelecimento.trim() === codigoEstabelecimento);
+  }
+
+  let cessoes = registros.filter(r => r.TipoRegistro === 5) as GetnetNegociacaoCessao[];
+  if (codigoEstabelecimento) {
+    cessoes = cessoes.filter(r => r.CodigoEstabelecimento.trim() === codigoEstabelecimento);
+  }
+  cessoes = cessoes.filter(r => r.Indicador === 'CS');
+
+  // 1. Faturamento (Tipo 1 + Tipo 2) → RECEBER, PAGAR, VENDA_CARTAO, COMPROVANTE
+  const faturamento = processarFaturamento(resumosVendas, comprovantes, clientId, cycleId, dataMovimento);
+
+  // 2. Ajustes (Tipo 3) → RECEBER ou PAGAR
+  logger.info(`Processando ${ajustes.length} ajustes financeiros`);
+  const ajustesResult = processarAjustes(ajustes, clientId, cycleId, dataMovimento);
+
+  // 3. Antecipações + Cessões (Tipo 4 + Tipo 5) → transações próprias + enriquecimento dos COMPROVANTEs
+  logger.info(`Processando ${antecipacoes.length} antecipações, ${cessoes.length} cessões CS`);
+  const antecCessaoResult = processarEEnriquecerAntecipacoesCessoes(
+    faturamento.transactions, antecipacoes, cessoes, clientId, cycleId, dataMovimento
+  );
+
+  // Juntar tudo
+  const transactions = [
+    ...faturamento.transactions,
+    ...ajustesResult.transactions,
+    ...antecCessaoResult.transactions,
+  ];
+
+  const totalReceber = faturamento.totalReceber + ajustesResult.totalReceber + antecCessaoResult.totalReceber;
+  const totalPagar = faturamento.totalPagar + ajustesResult.totalPagar + antecCessaoResult.totalPagar;
+  const totalVendas = faturamento.totalVendas;
 
   // Tipo 6 (URs) - IGNORADO
   const urs = registros.filter(r => r.TipoRegistro === 6);

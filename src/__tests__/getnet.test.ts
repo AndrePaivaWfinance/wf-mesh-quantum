@@ -258,6 +258,8 @@ function buildComprovanteVendas(opts: {
   nsu?: string;
   valorTransacao?: number;
   valorParcela?: number;
+  dataPagamento?: string;
+  bandeira?: string;
 } = {}): string {
   const line = new Array(401).fill(' ');
   line[0] = '2';
@@ -296,7 +298,7 @@ function buildComprovanteVendas(opts: {
   for (let i = 0; i < 12; i++) line[110 + i] = valorParcela[i];
 
   // DataPagamento [122:130]
-  const dataPgto = pad('20032026', 8);
+  const dataPgto = pad(opts.dataPagamento || '20032026', 8);
   for (let i = 0; i < 8; i++) line[122 + i] = dataPgto[i];
 
   // CodigoAutorizacao [130:140]
@@ -304,7 +306,7 @@ function buildComprovanteVendas(opts: {
   for (let i = 0; i < 10; i++) line[130 + i] = codAuth[i];
 
   // Bandeira [140:144]
-  const band = pad('VIS', 4);
+  const band = pad(opts.bandeira || 'VIS', 4);
   for (let i = 0; i < 4; i++) line[140 + i] = band[i];
 
   return line.join('');
@@ -360,6 +362,8 @@ function buildAntecipacao(opts: {
   valorBruto?: number;
   taxaAntec?: number;
   valorLiquido?: number;
+  dataOriginalPagamento?: string;
+  bandeira?: string;
 } = {}): string {
   const line = new Array(401).fill(' ');
   line[0] = '4';
@@ -371,7 +375,8 @@ function buildAntecipacao(opts: {
   line[16] = 'S'; line[17] = 'M';
 
   // Bandeira [18:21]
-  line[18] = 'V'; line[19] = 'I'; line[20] = 'S';
+  const bandChars = opts.bandeira || 'VIS';
+  line[18] = bandChars[0] || ' '; line[19] = bandChars[1] || ' '; line[20] = bandChars[2] || ' ';
 
   // NumOperacao [21:35]
   const numOp = pad(opts.numOperacao || '00000000000001', 14);
@@ -382,7 +387,7 @@ function buildAntecipacao(opts: {
   for (let i = 0; i < 8; i++) line[35 + i] = dataAntec[i];
 
   // DataOriginalPagamento [43:51]
-  const dataOrig = pad('25022026', 8);
+  const dataOrig = pad(opts.dataOriginalPagamento || '25022026', 8);
   for (let i = 0; i < 8; i++) line[43 + i] = dataOrig[i];
 
   // ValorBrutoAntecipacao [51:66]
@@ -1192,6 +1197,95 @@ describe('Getnet Capture Handler', () => {
     // Sem comprovantes, valor_faturamento = ValorBruto (fallback)
     expect(vendaCartao.metadata.valor_faturamento).toBe(500.00);
     expect(vendaCartao.metadata.qtd_comprovantes).toBe(0);
+  });
+
+  test('enriches COMPROVANTEs with antecipação when same file has Type 4 matching DataPagamento', async () => {
+    // Cenário: arquivo contém venda (Tipo 1), comprovantes (Tipo 2) e antecipação (Tipo 4)
+    // A antecipação tem DataOriginalPagamento = DataPagamento dos comprovantes → match!
+    const fileContent = [
+      buildHeader(),
+      buildResumoVendas({
+        numRV: '111111111',
+        dataRV: '19022026',
+        dataPgto: '20032026',       // DataPagamento do RV
+        valorBruto: 40000,          // R$ 400.00
+        valorTaxaDesconto: 2000,    // R$ 20.00 taxa
+        tipoPgto: 'PF',
+        bandeira: 'VIS',
+      }),
+      buildComprovanteVendas({
+        numRV: '111111111',
+        nsu: '000000000042',
+        valorTransacao: 20000,      // R$ 200.00
+        valorParcela: 6667,
+        dataPagamento: '20032026',
+        bandeira: 'VIS',
+      }),
+      buildComprovanteVendas({
+        numRV: '111111111',
+        nsu: '000000000043',
+        valorTransacao: 20000,      // R$ 200.00
+        valorParcela: 6667,
+        dataPagamento: '20032026',
+        bandeira: 'VIS',
+      }),
+      // Antecipação com DataOriginalPagamento = 20032026 (match com comprovantes)
+      buildAntecipacao({
+        numOperacao: '00000000000099',
+        valorBruto: 40000,          // R$ 400.00
+        taxaAntec: 1000,            // R$ 10.00 taxa de antecipação
+        valorLiquido: 39000,        // R$ 390.00
+        dataOriginalPagamento: '20032026', // match com comprovantes!
+        bandeira: 'VIS',
+      }),
+      buildTrailer({ totalRegistros: 5 }),
+    ].join('\n');
+
+    mockBuscarArquivoPorData.mockResolvedValueOnce({
+      erro: false,
+      mensagem: 'OK',
+      arquivo: 'getnetextr_20260220.txt',
+      conteudo: fileContent,
+      totalLinhas: 6,
+      tamanhoBytes: fileContent.length,
+    });
+
+    const handler = registeredRoutes['getnet-capture'].handler;
+    const req = {
+      json: async () => ({
+        clientId: 'client-1',
+        cycleId: 'cycle-1',
+        startDate: '2026-02-20',
+        action: 'listar',
+      }),
+    };
+
+    const result = await handler(req, { functionName: 'getnet-capture', invocationId: 'test' });
+
+    expect(result.status).toBe(200);
+    const txs = result.jsonBody.transactions as any[];
+
+    const comprovantes = txs.filter((t: any) => t.type === 'comprovante');
+    expect(comprovantes).toHaveLength(2);
+
+    // Cada comprovante deve estar enriquecido com antecipação
+    // 2 CVs de R$ 200 cada (50% cada) → taxa antecipação R$ 5.00 cada (10 * 0.5)
+    for (const cv of comprovantes) {
+      expect(cv.metadata.antecipacao).toBeDefined();
+      expect(cv.metadata.antecipacao.numero_operacao).toBe('00000000000099');
+      expect(cv.metadata.antecipacao.data_original_pagamento).toBe('2026-03-20');
+      expect(cv.metadata.antecipacao.taxa_antecipacao_proporcional).toBe(5.00);
+      // valor_liquido_antecipado = 200 (faturamento) - 10 (taxa maquineta) - 5 (taxa antecipação) = 185
+      expect(cv.metadata.antecipacao.valor_liquido_antecipado).toBe(185.00);
+    }
+
+    // VENDA_CARTAO também deve ter a antecipação propagada nos comprovantes[]
+    const vendaCartao = txs.find((t: any) => t.type === 'venda_cartao');
+    expect(vendaCartao).toBeDefined();
+    for (const cvRef of vendaCartao.metadata.comprovantes) {
+      expect(cvRef.antecipacao).toBeDefined();
+      expect(cvRef.antecipacao.taxa_antecipacao_proporcional).toBe(5.00);
+    }
   });
 });
 
