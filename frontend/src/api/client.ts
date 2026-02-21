@@ -92,6 +92,21 @@ export interface HealthResult {
   status: string;
 }
 
+interface ListEnvelope<T> {
+  items?: T[];
+  total?: number;
+}
+
+interface FilasEnvelope {
+  filas?: Fila[];
+}
+
+interface ActionResult {
+  ok?: boolean;
+  message?: string;
+  [key: string]: unknown;
+}
+
 const BASE_URL = '/api';
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
@@ -107,9 +122,8 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 /** Unwrap { items: T[] } envelope from backend */
 async function requestList<T>(path: string, options?: RequestInit): Promise<T[]> {
-  const res = await request<any>(path, options);
-  // Backend retorna { items: [...], total: N } — desempacotar
-  if (res && Array.isArray(res.items)) return res.items;
+  const res = await request<ListEnvelope<T> | T[]>(path, options);
+  if (!Array.isArray(res) && res && Array.isArray(res.items)) return res.items;
   if (Array.isArray(res)) return res;
   return [];
 }
@@ -128,31 +142,31 @@ export const api = {
   // Autorizacoes
   getAutorizacoes: () => requestList<Autorizacao>('/bpo/autorizacoes'),
   aprovarAutorizacao: (id: string, motivo?: string) =>
-    request<any>(`/bpo/autorizacoes/${id}/aprovar`, { method: 'POST', body: JSON.stringify({ motivo }) }),
+    request<ActionResult>(`/bpo/autorizacoes/${id}/aprovar`, { method: 'POST', body: JSON.stringify({ motivo }) }),
   rejeitarAutorizacao: (id: string, motivo: string) =>
-    request<any>(`/bpo/autorizacoes/${id}/rejeitar`, { method: 'POST', body: JSON.stringify({ motivo }) }),
+    request<ActionResult>(`/bpo/autorizacoes/${id}/rejeitar`, { method: 'POST', body: JSON.stringify({ motivo }) }),
 
   // Duvidas
   getDuvidas: () => requestList<Duvida>('/bpo/duvidas'),
   resolverDuvida: (id: string, categoria: string) =>
-    request<any>(`/bpo/duvidas/${id}/resolver`, { method: 'POST', body: JSON.stringify({ categoria }) }),
+    request<ActionResult>(`/bpo/duvidas/${id}/resolver`, { method: 'POST', body: JSON.stringify({ categoria }) }),
   pularDuvida: (id: string) =>
-    request<any>(`/bpo/duvidas/${id}/pular`, { method: 'POST' }),
+    request<ActionResult>(`/bpo/duvidas/${id}/pular`, { method: 'POST' }),
 
   // Filas & Metricas
   getFilas: async () => {
-    const res = await request<any>('/bpo/filas');
-    if (res && Array.isArray(res.filas)) return res.filas as Fila[];
-    if (Array.isArray(res)) return res as Fila[];
+    const res = await request<FilasEnvelope | Fila[]>('/bpo/filas');
+    if (!Array.isArray(res) && res && Array.isArray(res.filas)) return res.filas;
+    if (Array.isArray(res)) return res;
     return [];
   },
   getMetrics: (clientId?: string) => request<Metrics>(clientId ? `/bpo/metrics/${clientId}` : '/bpo/metrics'),
 
   // Historico
   getHistorico: async () => {
-    const res = await request<any>('/bpo/historico');
-    if (res && Array.isArray(res.items)) return res.items as HistoricoItem[];
-    if (Array.isArray(res)) return res as HistoricoItem[];
+    const res = await request<ListEnvelope<HistoricoItem> | HistoricoItem[]>('/bpo/historico');
+    if (!Array.isArray(res) && res && Array.isArray(res.items)) return res.items;
+    if (Array.isArray(res)) return res;
     return [];
   },
 
