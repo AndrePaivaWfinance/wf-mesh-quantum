@@ -57,7 +57,9 @@ export enum TransactionStatus {
 export enum TransactionSource {
   NIBO = 'nibo',
   OMIE = 'omie',
+  CONTROLLE = 'controlle',
   SANTANDER = 'santander',
+  INTER = 'inter',
   GETNET = 'getnet',
   OFX = 'ofx',
   EXCEL = 'excel',
