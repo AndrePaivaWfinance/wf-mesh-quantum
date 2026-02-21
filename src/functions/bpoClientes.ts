@@ -13,8 +13,8 @@ import {
   HttpResponseInit,
   InvocationContext,
 } from '@azure/functions';
-import { getClients, getClient, upsertClient } from '../storage/tableClient';
-import { Client, ClientSystem, ClientPlano, createClient } from '../types';
+import { getClients, getClient, upsertClient, countTransactions } from '../storage/tableClient';
+import { Client, ClientSystem, ClientPlano, TransactionStatus, createClient } from '../types';
 import { nowISO } from '../../shared/utils';
 
 // List clients
@@ -81,11 +81,17 @@ app.http('bpoClientesDetail', {
         };
       }
 
-      // TODO: Add metrics from transactions table
+      // Métricas reais do Table Storage
+      const [totalTxs, classificadas, pendentes] = await Promise.all([
+        countTransactions(id),
+        countTransactions(id, TransactionStatus.CLASSIFICADO),
+        countTransactions(id, TransactionStatus.REVISAO_PENDENTE),
+      ]);
+
       const metricas = {
-        transacoesMes: 0,
-        taxaAutoClassificacao: 0,
-        pendentes: 0,
+        transacoesMes: totalTxs,
+        taxaAutoClassificacao: totalTxs > 0 ? Math.round((classificadas / totalTxs) * 100) : 0,
+        pendentes,
       };
 
       return {

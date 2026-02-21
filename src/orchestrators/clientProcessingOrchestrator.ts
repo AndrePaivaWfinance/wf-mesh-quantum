@@ -67,12 +67,18 @@ const clientOrchestrator: OrchestrationHandler = function* (context: Orchestrati
         }
 
         // 5. Notify (Daily Summary)
+        // Calcula valor total processado a partir dos resultados
+        let totalValue = 0;
+        if (aiResult.syncCandidates && Array.isArray(aiResult.syncCandidates)) {
+            totalValue = aiResult.syncCandidates.reduce((sum: number, tx: any) => sum + Math.abs(tx.valor || 0), 0);
+        }
+
         const summaryData = {
             processed: aiResult.processedCount || 0,
             autoApproved: aiResult.autoApprovedCount || 0,
             needsReview: (aiResult.processedCount || 0) - (aiResult.autoApprovedCount || 0),
             anomalies: aiResult.results ? aiResult.results.filter((r: any) => r.anomalies && r.anomalies.length > 0).length : 0,
-            totalValue: 0 // TODO: Sum from transactions
+            totalValue,
         };
 
         yield context.df.callActivity('sendDailySummaryActivity', {

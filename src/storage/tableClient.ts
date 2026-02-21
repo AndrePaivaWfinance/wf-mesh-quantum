@@ -13,6 +13,7 @@ import {
   PendingAuthorization,
   EnrichmentDoubt,
   HistoryAction,
+  Category,
   CycleStatus,
   TransactionStatus,
 } from '../types';
@@ -43,6 +44,7 @@ const TABLES = {
   AUTHORIZATIONS: 'OperacaoAuthorizations',
   DOUBTS: 'OperacaoDoubts',
   HISTORY: 'OperacaoHistory',
+  CATEGORIES: 'OperacaoCategories',
 } as const;
 
 // ============================================================================
@@ -691,6 +693,94 @@ export async function createDoubt(doubt: EnrichmentDoubt): Promise<void> {
   };
 
   await client.createEntity(entity);
+}
+
+// ============================================================================
+// CATEGORIES
+// ============================================================================
+
+const DEFAULT_CATEGORIES: Category[] = [
+  { id: 'cat-001', clientId: 'DEFAULT', codigo: '1.1', nome: 'Fornecedores', tipo: 'despesa', nivel: 1, ativo: true },
+  { id: 'cat-002', clientId: 'DEFAULT', codigo: '1.2', nome: 'Impostos', tipo: 'despesa', nivel: 1, ativo: true },
+  { id: 'cat-003', clientId: 'DEFAULT', codigo: '1.3', nome: 'Folha de Pagamento', tipo: 'despesa', nivel: 1, ativo: true },
+  { id: 'cat-004', clientId: 'DEFAULT', codigo: '1.4', nome: 'Aluguel', tipo: 'despesa', nivel: 1, ativo: true },
+  { id: 'cat-005', clientId: 'DEFAULT', codigo: '1.5', nome: 'Servicos', tipo: 'despesa', nivel: 1, ativo: true },
+  { id: 'cat-006', clientId: 'DEFAULT', codigo: '1.6', nome: 'Marketing', tipo: 'despesa', nivel: 1, ativo: true },
+  { id: 'cat-007', clientId: 'DEFAULT', codigo: '1.7', nome: 'Despesas Financeiras', tipo: 'despesa', nivel: 1, ativo: true },
+  { id: 'cat-008', clientId: 'DEFAULT', codigo: '1.8', nome: 'Tecnologia', tipo: 'despesa', nivel: 1, ativo: true },
+  { id: 'cat-009', clientId: 'DEFAULT', codigo: '2.1', nome: 'Receita de Vendas', tipo: 'receita', nivel: 1, ativo: true },
+  { id: 'cat-010', clientId: 'DEFAULT', codigo: '2.2', nome: 'Receita de Servicos', tipo: 'receita', nivel: 1, ativo: true },
+  { id: 'cat-011', clientId: 'DEFAULT', codigo: '2.3', nome: 'Outras Receitas', tipo: 'receita', nivel: 1, ativo: true },
+  { id: 'cat-012', clientId: 'DEFAULT', codigo: '3.1', nome: 'Transferencias', tipo: 'transferencia', nivel: 1, ativo: true },
+];
+
+/** Buscar categorias por clientId, com fallback para DEFAULT */
+export async function getCategories(clientId: string): Promise<Category[]> {
+  try {
+    const client = getTableClient(TABLES.CATEGORIES);
+    const categories: Category[] = [];
+
+    // Buscar categorias do cliente
+    const entities = client.listEntities<TableEntity>({
+      queryOptions: { filter: `PartitionKey eq '${clientId}'` },
+    });
+
+    for await (const entity of entities) {
+      categories.push(entityToCategory(entity));
+    }
+
+    // Se não tem customizadas, buscar DEFAULT
+    if (categories.length === 0) {
+      const defaultEntities = client.listEntities<TableEntity>({
+        queryOptions: { filter: `PartitionKey eq 'DEFAULT'` },
+      });
+
+      for await (const entity of defaultEntities) {
+        categories.push(entityToCategory(entity));
+      }
+    }
+
+    // Se não tem nada no storage, retornar hardcoded
+    if (categories.length === 0) {
+      return DEFAULT_CATEGORIES;
+    }
+
+    return categories.filter(c => c.ativo);
+  } catch {
+    // Fallback para categorias default em memória
+    return DEFAULT_CATEGORIES;
+  }
+}
+
+/** Upsert categoria */
+export async function upsertCategory(category: Category): Promise<void> {
+  const client = getTableClient(TABLES.CATEGORIES);
+
+  const entity: TableEntity = {
+    partitionKey: category.clientId,
+    rowKey: category.id,
+    codigo: category.codigo,
+    nome: category.nome,
+    tipo: category.tipo,
+    pai: category.pai || '',
+    nivel: category.nivel,
+    ativo: category.ativo,
+  };
+
+  await client.upsertEntity(entity, 'Merge');
+}
+
+function entityToCategory(entity: TableEntity): Category {
+  return {
+    id: entity.rowKey as string,
+    clientId: entity.partitionKey as string,
+    codigo: (entity.codigo as string) || '',
+    nome: (entity.nome as string) || '',
+    tipo: (entity.tipo as 'receita' | 'despesa' | 'transferencia') || 'despesa',
+    pai: entity.pai as string | undefined,
+    nivel: (entity.nivel as number) || 1,
+    ativo: entity.ativo !== false,
+  };
 }
 
 // ============================================================================

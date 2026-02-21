@@ -15,6 +15,7 @@ import {
   getTransactionsByStatus,
   updateTransaction,
   createDoubt as createDoubtRecord,
+  getCategories,
 } from '../storage/tableClient';
 
 const logger = createLogger('ClassifyActivity');
@@ -42,7 +43,6 @@ df.app.activity('classifyBatchActivity', {
 
     try {
       // Get unclassified transactions for this client/cycle
-      // TODO: Implement transaction storage and retrieval
       const transactions = await getUnclassifiedTransactions(clientId, cycleId);
 
       if (transactions.length === 0) {
@@ -174,19 +174,27 @@ async function getUnclassifiedTransactions(
 }
 
 async function getClientCategories(clientId: string): Promise<any[]> {
-  // TODO: Implement - get from categories table
-  // Return default categories for now
-  return [
-    { id: 'cat-001', nome: 'Fornecedores', tipo: 'despesa' },
-    { id: 'cat-002', nome: 'Impostos', tipo: 'despesa' },
-    { id: 'cat-003', nome: 'Folha de Pagamento', tipo: 'despesa' },
-    { id: 'cat-004', nome: 'Aluguel', tipo: 'despesa' },
-    { id: 'cat-005', nome: 'Serviços', tipo: 'despesa' },
-    { id: 'cat-006', nome: 'Receita de Vendas', tipo: 'receita' },
-    { id: 'cat-007', nome: 'Receita de Serviços', tipo: 'receita' },
-    { id: 'cat-008', nome: 'Outras Receitas', tipo: 'receita' },
-    { id: 'cat-009', nome: 'Transferências', tipo: 'transferencia' },
-  ];
+  try {
+    const categories = await getCategories(clientId);
+    return categories.map(c => ({
+      id: c.id,
+      nome: c.nome,
+      tipo: c.tipo,
+    }));
+  } catch (error) {
+    logger.error('Failed to get categories from storage, using defaults', error);
+    return [
+      { id: 'cat-001', nome: 'Fornecedores', tipo: 'despesa' },
+      { id: 'cat-002', nome: 'Impostos', tipo: 'despesa' },
+      { id: 'cat-003', nome: 'Folha de Pagamento', tipo: 'despesa' },
+      { id: 'cat-004', nome: 'Aluguel', tipo: 'despesa' },
+      { id: 'cat-005', nome: 'Servicos', tipo: 'despesa' },
+      { id: 'cat-006', nome: 'Receita de Vendas', tipo: 'receita' },
+      { id: 'cat-007', nome: 'Receita de Servicos', tipo: 'receita' },
+      { id: 'cat-008', nome: 'Outras Receitas', tipo: 'receita' },
+      { id: 'cat-009', nome: 'Transferencias', tipo: 'transferencia' },
+    ];
+  }
 }
 
 async function classifyTransaction(

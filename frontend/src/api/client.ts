@@ -105,42 +105,61 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
+/** Unwrap { items: T[] } envelope from backend */
+async function requestList<T>(path: string, options?: RequestInit): Promise<T[]> {
+  const res = await request<any>(path, options);
+  // Backend retorna { items: [...], total: N } — desempacotar
+  if (res && Array.isArray(res.items)) return res.items;
+  if (Array.isArray(res)) return res;
+  return [];
+}
+
 export const api = {
   // Dashboard
   getDashboard: () => request<Dashboard>('/bpo/dashboard'),
   getHealth: () => request<HealthResult>('/health'),
 
   // Clientes
-  getClientes: () => request<Cliente[]>('/bpo/clientes'),
+  getClientes: () => requestList<Cliente>('/bpo/clientes'),
   getCliente: (id: string) => request<Cliente>(`/bpo/clientes/${id}`),
   createCliente: (data: ClienteForm) => request<Cliente>('/bpo/clientes', { method: 'POST', body: JSON.stringify(data) }),
   updateCliente: (id: string, data: ClienteForm) => request<Cliente>(`/bpo/clientes/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
 
-  // Autorizações
-  getAutorizacoes: () => request<Autorizacao[]>('/bpo/autorizacoes'),
+  // Autorizacoes
+  getAutorizacoes: () => requestList<Autorizacao>('/bpo/autorizacoes'),
   aprovarAutorizacao: (id: string, motivo?: string) =>
-    request<Autorizacao>(`/bpo/autorizacoes/${id}/aprovar`, { method: 'POST', body: JSON.stringify({ motivo }) }),
+    request<any>(`/bpo/autorizacoes/${id}/aprovar`, { method: 'POST', body: JSON.stringify({ motivo }) }),
   rejeitarAutorizacao: (id: string, motivo: string) =>
-    request<Autorizacao>(`/bpo/autorizacoes/${id}/rejeitar`, { method: 'POST', body: JSON.stringify({ motivo }) }),
+    request<any>(`/bpo/autorizacoes/${id}/rejeitar`, { method: 'POST', body: JSON.stringify({ motivo }) }),
 
-  // Dúvidas
-  getDuvidas: () => request<Duvida[]>('/bpo/duvidas'),
+  // Duvidas
+  getDuvidas: () => requestList<Duvida>('/bpo/duvidas'),
   resolverDuvida: (id: string, categoria: string) =>
-    request<Duvida>(`/bpo/duvidas/${id}/resolver`, { method: 'POST', body: JSON.stringify({ categoria }) }),
+    request<any>(`/bpo/duvidas/${id}/resolver`, { method: 'POST', body: JSON.stringify({ categoria }) }),
   pularDuvida: (id: string) =>
-    request<Duvida>(`/bpo/duvidas/${id}/pular`, { method: 'POST' }),
+    request<any>(`/bpo/duvidas/${id}/pular`, { method: 'POST' }),
 
-  // Filas & Métricas
-  getFilas: () => request<Fila[]>('/bpo/filas'),
+  // Filas & Metricas
+  getFilas: async () => {
+    const res = await request<any>('/bpo/filas');
+    if (res && Array.isArray(res.filas)) return res.filas as Fila[];
+    if (Array.isArray(res)) return res as Fila[];
+    return [];
+  },
   getMetrics: (clientId?: string) => request<Metrics>(clientId ? `/bpo/metrics/${clientId}` : '/bpo/metrics'),
 
-  // Histórico
-  getHistorico: () => request<HistoricoItem[]>('/bpo/historico'),
+  // Historico
+  getHistorico: async () => {
+    const res = await request<any>('/bpo/historico');
+    if (res && Array.isArray(res.items)) return res.items as HistoricoItem[];
+    if (Array.isArray(res)) return res as HistoricoItem[];
+    return [];
+  },
 
   // Ciclo
   startCycle: () => request<CycleResult>('/bpo/cycle', { method: 'POST' }),
   getCycle: (id: string) => request<CycleResult>(`/bpo/cycle/${id}`),
 
-  // Simulação
+  // Simulacao
   simulate: (params?: Record<string, unknown>) => request<CycleResult>('/bpo/simulate', { method: 'POST', body: JSON.stringify(params || {}) }),
 };

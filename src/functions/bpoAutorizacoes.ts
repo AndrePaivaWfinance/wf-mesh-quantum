@@ -69,12 +69,17 @@ app.http('bpoAutorizacoesAprovar', {
     try {
       const body = (await request.json()) as { notas?: string };
 
+      // Buscar autorização para obter o clientId antes de aprovar
+      const allAuths = await getPendingAuthorizations();
+      const authRecord = allAuths.find(a => a.id === id);
+      const authClientId = authRecord?.clientId || 'SYSTEM';
+
       await approveAuthorization(id, body.notas);
 
       // Add to history
       await addHistoryAction({
         id: `hist-${Date.now()}`,
-        clientId: 'SYSTEM', // TODO: get from authorization
+        clientId: authClientId,
         tipo: 'aprovacao',
         descricao: `Autorização ${id} aprovada`,
         data: nowISO(),
@@ -120,12 +125,17 @@ app.http('bpoAutorizacoesRejeitar', {
         };
       }
 
+      // Buscar autorização para obter o clientId antes de rejeitar
+      const rejectAuths = await getPendingAuthorizations();
+      const rejectAuth = rejectAuths.find(a => a.id === id);
+      const rejectClientId = rejectAuth?.clientId || 'SYSTEM';
+
       await rejectAuthorization(id, body.motivo);
 
       // Add to history
       await addHistoryAction({
         id: `hist-${Date.now()}`,
-        clientId: 'SYSTEM',
+        clientId: rejectClientId,
         tipo: 'rejeicao',
         descricao: `Autorização ${id} rejeitada: ${body.motivo}`,
         data: nowISO(),
