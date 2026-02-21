@@ -1,5 +1,6 @@
 
 import { createLogger } from '../../shared/utils';
+import { Client } from '../../shared/types';
 
 const logger = createLogger('ProactiveNotifier');
 
@@ -18,10 +19,31 @@ export interface Notification {
 }
 
 export class ProactiveNotifier {
-    private readonly defaultChannel = 'email'; // Pode vir de config
+    private readonly defaultChannel = 'email';
 
     constructor() {
         // Inicializar clientes de envio (SendGrid, Twilio, etc.)
+    }
+
+    /**
+     * Resolve o email de destino a partir do config do cliente
+     */
+    private getEmailDestinatario(clientId: string, clientConfig?: Client['config']): string {
+        if (clientConfig?.notificacoes?.emailDestino) {
+            return clientConfig.notificacoes.emailDestino;
+        }
+        // Fallback para email padrão baseado no clientId
+        return `operacoes@wfinance.com.br`;
+    }
+
+    /**
+     * Resolve o número WhatsApp a partir do config do cliente
+     */
+    private getWhatsappDestinatario(clientId: string, clientConfig?: Client['config']): string {
+        if (clientConfig?.notificacoes?.whatsappNumero) {
+            return clientConfig.notificacoes.whatsappNumero;
+        }
+        return '';
     }
 
     async sendDailySummary(clientId: string, summaryData: {
@@ -30,15 +52,15 @@ export class ProactiveNotifier {
         needsReview: number;
         anomalies: number;
         totalValue: number;
-    }): Promise<void> {
+    }, clientConfig?: Client['config']): Promise<void> {
         const message = `
-# Resumo Diário de Operações - ${new Date().toLocaleDateString()}
+# Resumo Diario de Operacoes - ${new Date().toLocaleDateString('pt-BR')}
 
-Olá! Segue o resumo das operações de hoje para o cliente ${clientId}:
+Ola! Segue o resumo das operacoes de hoje para o cliente ${clientId}:
 
-- **Processadas**: ${summaryData.processed} transações
+- **Processadas**: ${summaryData.processed} transacoes
 - **Aprovadas Automaticamente**: ${summaryData.autoApproved} (Economia de tempo estimada: ${(summaryData.autoApproved * 0.5).toFixed(1)} min)
-- **Requer Revisão**: ${summaryData.needsReview}
+- **Requer Revisao**: ${summaryData.needsReview}
 - **Anomalias Detectadas**: ${summaryData.anomalies}
 
 Valor Total Processado: R$ ${summaryData.totalValue.toFixed(2)}
@@ -46,9 +68,11 @@ Valor Total Processado: R$ ${summaryData.totalValue.toFixed(2)}
 [Acessar Dashboard](https://app.wfinance.com.br/dashboard/${clientId})
     `;
 
+        const destinatario = this.getEmailDestinatario(clientId, clientConfig);
+
         await this.notify({
             tipo: 'resumo',
-            destinatario: `contato@${clientId}.com`, // TODO: Pegar do TenantConfig
+            destinatario,
             canal: 'email',
             prioridade: 'media',
             conteudo: message,
@@ -61,13 +85,15 @@ Valor Total Processado: R$ ${summaryData.totalValue.toFixed(2)}
         message: string;
         severity: 'alta' | 'critica';
         transactionId?: string;
-    }): Promise<void> {
-        const prefix = alert.severity === 'critica' ? '🚨 [URGENTE]' : '⚠️ [ALERTA]';
+    }, clientConfig?: Client['config']): Promise<void> {
+        const prefix = alert.severity === 'critica' ? '[URGENTE]' : '[ALERTA]';
+        const whatsapp = this.getWhatsappDestinatario(clientId, clientConfig);
+        const useWhatsapp = !!whatsapp && clientConfig?.notificacoes?.whatsapp;
 
         await this.notify({
             tipo: 'alerta',
-            destinatario: `admin@${clientId}.com`,
-            canal: 'whatsapp', // Urgente vai no whats
+            destinatario: useWhatsapp ? whatsapp : this.getEmailDestinatario(clientId, clientConfig),
+            canal: useWhatsapp ? 'whatsapp' : 'email',
             prioridade: 'alta',
             conteudo: `${prefix} ${alert.title}\n\n${alert.message}`,
             metadata: { transactionId: alert.transactionId }

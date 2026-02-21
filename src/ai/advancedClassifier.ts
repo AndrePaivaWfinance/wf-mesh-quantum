@@ -1,6 +1,8 @@
 import OpenAI from 'openai';
 import { Transaction, ClassificationResult, FeedbackRecord } from '../../shared/types';
 import { getOpenAIClient, ADVANCED_MODEL } from './openaiClient';
+import { LearningLoop, FeedbackRecord as LearningFeedbackRecord } from '../learning/learningLoop';
+import { getTransactionHistory } from '../storage/tableClient';
 
 /**
  * Classificador Avançado (80/20 System)
@@ -11,6 +13,7 @@ export class AdvancedClassifier {
     private readonly CONFIDENCE_THRESHOLD_AUTO = 0.85; // 85% para automação
     private readonly MODEL_VERSION = ADVANCED_MODEL;
     private openai: OpenAI;
+    private learningLoop: LearningLoop;
 
     constructor(
         apiKey: string,
@@ -18,6 +21,7 @@ export class AdvancedClassifier {
     ) {
         if (!apiKey) throw new Error('OpenAI API Key is required');
         this.openai = getOpenAIClient(apiKey);
+        this.learningLoop = new LearningLoop();
     }
 
     /**
@@ -43,17 +47,78 @@ export class AdvancedClassifier {
      * Registra feedback humano para o loop de aprendizado
      */
     async learn(feedback: FeedbackRecord): Promise<void> {
-        // TODO: Implementar armazenamento de feedback para fine-tuning
-        console.log(`Learning from feedback: ${feedback.transactionId}`, feedback);
+        const learningFeedback: LearningFeedbackRecord = {
+            transactionId: feedback.transactionId,
+            clientId: feedback.clientId,
+            originalClassification: {
+                categoria: feedback.predictionIA?.categoria || 'Desconhecido',
+                confianca: feedback.predictionIA?.confianca || 0,
+                explicacao: feedback.predictionIA?.explicacao || '',
+                tipoDespesa: 'variavel',
+                recorrencia: 'unica',
+                alternativas: [],
+            },
+            humanCorrection: feedback.correcaoHumana?.categoria || feedback.correcaoHumana || '',
+            comment: feedback.correcaoHumana?.comentario,
+            timestamp: feedback.timestamp,
+            userId: feedback.usuario || 'system',
+        };
+
+        await this.learningLoop.recordFeedback(learningFeedback);
     }
 
     /**
-     * Busca transações similares para few-shot learning
+     * Busca transações similares para few-shot learning via keyword search no histórico
      */
     private async getSimilarTransactions(current: Transaction): Promise<Transaction[]> {
-        // TODO: Implementar busca vetorial ou keyword search no histórico
-        // Por enquanto retorna vazio
-        return [];
+        try {
+            // 1. Buscar exemplos de feedback (correções humanas) para few-shot context
+            const feedbackExamples = await this.learningLoop.getExamplesForContext(
+                current.clientId,
+                5
+            );
+
+            // 2. Buscar transações históricas classificadas para keyword matching
+            const history = await getTransactionHistory(current.clientId, 50);
+
+            // 3. Filtrar por keyword similarity (descricao/contraparte)
+            const keywords = this.extractKeywords(current.descricao);
+            const similar = history
+                .filter(tx =>
+                    tx.categoriaNome && // Só classificadas
+                    tx.id !== current.id &&
+                    keywords.some(kw =>
+                        tx.descricao.toLowerCase().includes(kw) ||
+                        (tx.contraparte && tx.contraparte.toLowerCase().includes(kw))
+                    )
+                )
+                .slice(0, 3);
+
+            // 4. Enriquecer com categorias corrigidas do feedback
+            for (const fb of feedbackExamples) {
+                const existing = similar.find(s => s.id === fb.transactionId);
+                if (existing) {
+                    existing.categoriaNome = fb.humanCorrection;
+                }
+            }
+
+            return similar;
+        } catch (error) {
+            // Fallback silencioso — classificação funciona sem contexto
+            return [];
+        }
+    }
+
+    /**
+     * Extrai keywords da descrição para busca por similaridade
+     */
+    private extractKeywords(text: string): string[] {
+        const stopwords = ['de', 'da', 'do', 'para', 'em', 'no', 'na', 'os', 'as', 'um', 'uma', 'e', 'ou', 'com', 'por', 'que', 'pix', 'ted', 'doc'];
+        return text
+            .toLowerCase()
+            .replace(/[^a-záéíóúàâêôãõç\s]/g, '')
+            .split(/\s+/)
+            .filter(w => w.length > 2 && !stopwords.includes(w));
     }
 
     /**

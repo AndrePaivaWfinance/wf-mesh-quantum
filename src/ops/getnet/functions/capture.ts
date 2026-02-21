@@ -862,7 +862,119 @@ function gerarTransacoes(
 }
 
 // ============================================================================
-// HTTP HANDLER
+// CORE LOGIC (reutilizável pelo captureActivity sem HTTP)
+// ============================================================================
+
+export interface GetnetCaptureInput {
+  clientId: string;
+  cycleId: string;
+  startDate?: string;
+  codigoEstabelecimento?: string;
+}
+
+export interface GetnetCaptureOutput {
+  success: boolean;
+  source: 'getnet';
+  clientId: string;
+  cycleId: string;
+  transactions: { total: number; new: number; updated: number; skipped: number };
+  receber: number;
+  pagar: number;
+  vendas: number;
+  durationMs: number;
+  error?: string;
+}
+
+/**
+ * Executa captura Getnet via SFTP — chamável direto (sem HTTP).
+ * Usado pelo captureActivity e pelo HTTP handler.
+ */
+export async function executeGetnetCapture(input: GetnetCaptureInput): Promise<GetnetCaptureOutput> {
+  const startTime = Date.now();
+  const { clientId, cycleId, codigoEstabelecimento } = input;
+
+  try {
+    const dataBusca = input.startDate || new Date().toISOString().split('T')[0];
+
+    // 1. Conectar e baixar arquivo SFTP
+    const cliente = getGetnetClient();
+    const resultado = await cliente.buscarArquivoPorData(dataBusca);
+
+    if (resultado.erro || !resultado.conteudo) {
+      return {
+        success: false, source: 'getnet', clientId, cycleId,
+        transactions: { total: 0, new: 0, updated: 0, skipped: 0 },
+        receber: 0, pagar: 0, vendas: 0,
+        durationMs: Date.now() - startTime,
+        error: `Falha SFTP: ${resultado.mensagem}`,
+      };
+    }
+
+    const nomeArquivo = resultado.arquivo!;
+    logger.info(`Arquivo baixado: ${nomeArquivo} (${resultado.totalLinhas} linhas)`);
+
+    // 2. Extrair data do nome do arquivo (getnetextr_YYYYMMDD.txt)
+    let dataMovimento = dataBusca;
+    try {
+      const dataArquivo = nomeArquivo.split('_')[1].split('.')[0];
+      dataMovimento = `${dataArquivo.substring(0, 4)}-${dataArquivo.substring(4, 6)}-${dataArquivo.substring(6, 8)}`;
+    } catch {
+      logger.warn('Nao foi possivel extrair data do nome do arquivo');
+    }
+
+    // 3. Parsear arquivo
+    const registros = parseConteudo(resultado.conteudo);
+    if (!registros || registros.length === 0) {
+      return {
+        success: false, source: 'getnet', clientId, cycleId,
+        transactions: { total: 0, new: 0, updated: 0, skipped: 0 },
+        receber: 0, pagar: 0, vendas: 0,
+        durationMs: Date.now() - startTime,
+        error: 'Arquivo vazio ou invalido (0 registros)',
+      };
+    }
+
+    // 4. Gerar transacoes
+    const { transactions, totais } = gerarTransacoes(
+      registros, clientId, cycleId, dataMovimento, codigoEstabelecimento
+    );
+    logger.info(`Transacoes geradas: RECEBER=${totais.receber} PAGAR=${totais.pagar} VENDAS=${totais.vendas}`);
+
+    // 5. Persistir com idempotencia
+    const existingSourceIds = await getExistingSourceIds(clientId, 'getnet');
+    let result = { created: [] as string[], updated: [] as string[], skipped: [] as string[] };
+    if (transactions.length > 0) {
+      result = await upsertTransactionsIdempotent(transactions, existingSourceIds);
+      logger.info('Transactions persisted (idempotent)', {
+        created: result.created.length, updated: result.updated.length, skipped: result.skipped.length,
+      });
+    }
+
+    return {
+      success: true, source: 'getnet', clientId, cycleId,
+      transactions: {
+        total: transactions.length,
+        new: result.created.length,
+        updated: result.updated.length,
+        skipped: result.skipped.length,
+      },
+      receber: totais.receber, pagar: totais.pagar, vendas: totais.vendas,
+      durationMs: Date.now() - startTime,
+    };
+  } catch (error: any) {
+    logger.error('Getnet capture failed', error);
+    return {
+      success: false, source: 'getnet', clientId, cycleId,
+      transactions: { total: 0, new: 0, updated: 0, skipped: 0 },
+      receber: 0, pagar: 0, vendas: 0,
+      durationMs: Date.now() - startTime,
+      error: error.message,
+    };
+  }
+}
+
+// ============================================================================
+// HTTP HANDLER (delega para a lógica core)
 // ============================================================================
 
 app.http('getnet-capture', {
