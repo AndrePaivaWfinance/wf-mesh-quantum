@@ -1,9 +1,10 @@
 /**
  * CredentialResolver - Resolução de credenciais per-client
  *
- * Estratégia:
- *   1. Lê do ClientConfig (Table Storage) — per-client
- *   2. Fallback para env vars (global) — compatibilidade com cliente único
+ * Estratégia (em ordem de prioridade):
+ *   1. Key Vault per-client (prefix "kv:" no ClientConfig → busca no KV)
+ *   2. ClientConfig direto (valor literal no campo)
+ *   3. Env vars globais (fallback para setup legado / cliente único)
  *
  * Isso permite que N clientes coexistam, cada um com suas credenciais,
  * sem quebrar o fluxo de quem ainda usa env vars globais.
@@ -12,6 +13,7 @@
 import { Client, ClientConfig } from '../../shared/types';
 import { getClientById } from '../../shared/storage/clientStorage';
 import { createLogger } from '../../shared/utils';
+import { getTenantSecret, SECRET_NAMES } from './keyVaultHelper';
 
 const logger = createLogger('CredentialResolver');
 
@@ -44,40 +46,107 @@ export interface GetnetCredentials {
 }
 
 // ============================================================================
-// RESOLVER
+// HELPERS
+// ============================================================================
+
+/**
+ * Resolve um valor que pode ser:
+ *   - "kv:secret-name" → busca no Key Vault
+ *   - valor literal    → retorna direto
+ *   - undefined/empty  → retorna fallback
+ */
+async function resolveValue(
+  configValue: string | undefined,
+  envFallback: string | undefined,
+  tenantId?: string,
+  kvSecretName?: string
+): Promise<string> {
+  // 1. Se ClientConfig tem prefixo "kv:" → buscar no Key Vault
+  if (configValue?.startsWith('kv:')) {
+    const secretName = configValue.slice(3); // remove "kv:"
+    const value = await getTenantSecret('', secretName); // nome completo já inclui tenantId
+    if (value) return value;
+    logger.warn(`Key Vault secret not found: ${secretName}, falling back to env`);
+  }
+
+  // 2. Se ClientConfig tem valor literal → usar direto
+  if (configValue && !configValue.startsWith('kv:')) {
+    return configValue;
+  }
+
+  // 3. Se tem tenantId + kvSecretName → tentar Key Vault per-tenant
+  if (tenantId && kvSecretName) {
+    const value = await getTenantSecret(tenantId, kvSecretName);
+    if (value) return value;
+  }
+
+  // 4. Fallback para env var
+  return envFallback || '';
+}
+
+// ============================================================================
+// RESOLVERS
 // ============================================================================
 
 /**
  * Resolve credenciais Omie para um cliente.
- * ClientConfig first, env vars fallback.
+ * Key Vault → ClientConfig → env vars.
  */
-export function resolveOmieCredentials(config: ClientConfig): OmieCredentials {
-  const appKey = config.omieAppKey || process.env.OMIE_APP_KEY || '';
-  const appSecret = config.omieAppSecret || process.env.OMIE_APP_SECRET || '';
+export async function resolveOmieCredentials(
+  config: ClientConfig,
+  tenantId?: string
+): Promise<OmieCredentials> {
+  const appKey = await resolveValue(
+    config.omieAppKey,
+    process.env.OMIE_APP_KEY,
+    tenantId,
+    SECRET_NAMES.omie.APP_KEY
+  );
+
+  const appSecret = await resolveValue(
+    config.omieAppSecret,
+    process.env.OMIE_APP_SECRET,
+    tenantId,
+    SECRET_NAMES.omie.APP_SECRET
+  );
 
   if (!appKey || !appSecret) {
-    throw new Error('Omie credentials not found (neither in ClientConfig nor env vars)');
+    throw new Error('Omie credentials not found (Key Vault, ClientConfig, nor env vars)');
   }
 
-  const source = config.omieAppKey ? 'ClientConfig' : 'env';
-  logger.info(`Omie credentials resolved from ${source}`);
-
+  logger.info('Omie credentials resolved', { tenantId, fromKv: config.omieAppKey?.startsWith('kv:') });
   return { appKey, appSecret };
 }
 
 /**
  * Resolve credenciais Santander para um cliente.
- * ClientConfig first, env vars fallback.
- *
- * Nota: Santander tem muitos campos. Os campos de OAuth (clientId/clientSecret)
- * ainda ficam em env vars ou Key Vault por segurança. Dados bancários (agência/conta)
- * ficam no ClientConfig.
+ * Key Vault per-client → env vars.
  */
-export function resolveSantanderCredentials(config: ClientConfig): SantanderCredentials {
+export async function resolveSantanderCredentials(
+  config: ClientConfig,
+  tenantId?: string
+): Promise<SantanderCredentials> {
+  // OAuth — Key Vault per-tenant ou env vars
+  const clientId = tenantId
+    ? await resolveValue(undefined, process.env.SANTANDER_CLIENT_ID, tenantId, SECRET_NAMES.santander.CLIENT_ID)
+    : process.env.SANTANDER_CLIENT_ID || '';
+
+  const clientSecret = tenantId
+    ? await resolveValue(undefined, process.env.SANTANDER_CLIENT_SECRET, tenantId, SECRET_NAMES.santander.CLIENT_SECRET)
+    : process.env.SANTANDER_CLIENT_SECRET || '';
+
+  // mTLS — Key Vault per-tenant ou env vars
+  const certBase64 = tenantId
+    ? await resolveValue(undefined, process.env.SANTANDER_CERT_BASE64, tenantId, SECRET_NAMES.santander.CERT_BASE64)
+    : process.env.SANTANDER_CERT_BASE64;
+
+  const keyBase64 = tenantId
+    ? await resolveValue(undefined, process.env.SANTANDER_KEY_BASE64, tenantId, SECRET_NAMES.santander.KEY_BASE64)
+    : process.env.SANTANDER_KEY_BASE64;
+
   return {
-    // OAuth — env vars (sensíveis, compartilhados ou per-client via Key Vault no futuro)
-    clientId: process.env.SANTANDER_CLIENT_ID || '',
-    clientSecret: process.env.SANTANDER_CLIENT_SECRET || '',
+    clientId,
+    clientSecret,
     environment: (process.env.SANTANDER_ENVIRONMENT as 'sandbox' | 'production') || 'sandbox',
     workspaceId: process.env.SANTANDER_WORKSPACE_ID,
     convenio: process.env.SANTANDER_CONVENIO,
@@ -87,9 +156,8 @@ export function resolveSantanderCredentials(config: ClientConfig): SantanderCred
     conta: config.bancoConta || process.env.SANTANDER_CONTA,
     contaDigito: process.env.SANTANDER_CONTA_DIGITO,
 
-    // mTLS — env vars (certificados ficam seguros no App Settings / Key Vault)
-    certBase64: process.env.SANTANDER_CERT_BASE64,
-    keyBase64: process.env.SANTANDER_KEY_BASE64,
+    certBase64,
+    keyBase64,
   };
 }
 
@@ -129,12 +197,12 @@ export async function resolveClientCredentials(clientId: string): Promise<{
 
   // Resolve por sistema ERP
   if (client.sistema === 'omie') {
-    result.omie = resolveOmieCredentials(client.config);
+    result.omie = await resolveOmieCredentials(client.config, client.tenantId);
   }
 
   // Resolve por banco
   if (client.config.banco === 'santander') {
-    result.santander = resolveSantanderCredentials(client.config);
+    result.santander = await resolveSantanderCredentials(client.config, client.tenantId);
   }
 
   // Resolve por adquirente

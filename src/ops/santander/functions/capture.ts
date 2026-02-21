@@ -134,7 +134,7 @@ app.http('santander-capture', {
       let client;
       const clientData = await getClientById(clientId);
       if (clientData?.config?.banco === 'santander' && clientData?.config?.bancoAgencia) {
-        const creds = resolveSantanderCredentials(clientData.config);
+        const creds = await resolveSantanderCredentials(clientData.config, clientData.tenantId);
         client = getSantanderClientForTenant(creds);
         logger.info('Using per-client Santander credentials', { clientId });
       } else {

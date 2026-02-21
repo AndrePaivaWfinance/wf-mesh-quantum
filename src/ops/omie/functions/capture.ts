@@ -99,7 +99,7 @@ app.http('omie-capture', {
       let client;
       const clientData = await getClientById(clientId);
       if (clientData?.config?.omieAppKey && clientData?.config?.omieAppSecret) {
-        const creds = resolveOmieCredentials(clientData.config);
+        const creds = await resolveOmieCredentials(clientData.config, clientData.tenantId);
         client = getOmieClientForTenant(creds.appKey, creds.appSecret);
         logger.info('Using per-client Omie credentials', { clientId });
       } else {
