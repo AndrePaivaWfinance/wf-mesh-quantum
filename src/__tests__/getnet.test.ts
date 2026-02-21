@@ -1287,6 +1287,180 @@ describe('Getnet Capture Handler', () => {
       expect(cvRef.antecipacao.taxa_antecipacao_proporcional).toBe(5.00);
     }
   });
+
+  test('traceability: all transaction types share consistent tracking numbers (RV, NSU, sourceId, vinculadoA)', async () => {
+    // Cenário completo: venda + 2 comprovantes + antecipação no mesmo arquivo
+    // Verifica que a CADEIA DE RASTREIO é consistente de ponta a ponta:
+    //   RECEBER ←RV→ PAGAR ←RV→ VENDA_CARTAO ←id/RV→ COMPROVANTE ←DataPgto→ ANTECIPAÇÃO
+    const RV = '777777777';
+    const NSU_1 = '000000000077';
+    const NSU_2 = '000000000078';
+    const DATA_PGTO = '15032026'; // 2026-03-15
+    const DATA_PGTO_ISO = '2026-03-15';
+    const BANDEIRA = 'MCC';
+    const COD_ESTAB = '000012345678901';
+    const NUM_OP_ANTEC = '00000000000055';
+
+    const fileContent = [
+      buildHeader(),
+      buildResumoVendas({
+        codEstab: COD_ESTAB,
+        numRV: RV,
+        dataRV: '19022026',
+        dataPgto: DATA_PGTO,
+        valorBruto: 60000,          // R$ 600.00
+        valorTaxaDesconto: 3000,    // R$ 30.00
+        tipoPgto: 'PF',
+        bandeira: BANDEIRA,
+      }),
+      buildComprovanteVendas({
+        codEstab: COD_ESTAB,
+        numRV: RV,
+        nsu: NSU_1,
+        valorTransacao: 40000,      // R$ 400.00 (2/3 do bruto)
+        valorParcela: 13334,
+        dataPagamento: DATA_PGTO,
+        bandeira: BANDEIRA,
+      }),
+      buildComprovanteVendas({
+        codEstab: COD_ESTAB,
+        numRV: RV,
+        nsu: NSU_2,
+        valorTransacao: 20000,      // R$ 200.00 (1/3 do bruto)
+        valorParcela: 6667,
+        dataPagamento: DATA_PGTO,
+        bandeira: BANDEIRA,
+      }),
+      buildAntecipacao({
+        codEstab: COD_ESTAB,
+        numOperacao: NUM_OP_ANTEC,
+        valorBruto: 60000,          // R$ 600.00
+        taxaAntec: 1200,            // R$ 12.00
+        valorLiquido: 58800,        // R$ 588.00
+        dataOriginalPagamento: DATA_PGTO,
+        bandeira: BANDEIRA,
+      }),
+      buildTrailer({ totalRegistros: 5 }),
+    ].join('\n');
+
+    mockBuscarArquivoPorData.mockResolvedValueOnce({
+      erro: false,
+      mensagem: 'OK',
+      arquivo: 'getnetextr_20260220.txt',
+      conteudo: fileContent,
+      totalLinhas: 6,
+      tamanhoBytes: fileContent.length,
+    });
+
+    const handler = registeredRoutes['getnet-capture'].handler;
+    const req = {
+      json: async () => ({
+        clientId: 'client-1',
+        cycleId: 'cycle-1',
+        startDate: '2026-02-20',
+        action: 'listar',
+      }),
+    };
+
+    const result = await handler(req, { functionName: 'getnet-capture', invocationId: 'test' });
+    expect(result.status).toBe(200);
+
+    const txs = result.jsonBody.transactions as any[];
+    const receber = txs.find((t: any) => t.type === 'receber' && t.metadata.numero_rv === RV);
+    const pagar = txs.find((t: any) => t.type === 'pagar' && t.metadata.numero_rv === RV);
+    const vendaCartao = txs.find((t: any) => t.type === 'venda_cartao' && t.metadata.numero_rv === RV);
+    const cv1 = txs.find((t: any) => t.type === 'comprovante' && t.metadata.nsu === NSU_1);
+    const cv2 = txs.find((t: any) => t.type === 'comprovante' && t.metadata.nsu === NSU_2);
+    const antecReceber = txs.find((t: any) => t.type === 'receber' && t.metadata.tipo_registro === 'antecipacao_receber');
+    const antecPagar = txs.find((t: any) => t.type === 'pagar' && t.metadata.tipo_registro === 'antecipacao_taxa');
+
+    // ===== 1. Todos existem =====
+    expect(receber).toBeDefined();
+    expect(pagar).toBeDefined();
+    expect(vendaCartao).toBeDefined();
+    expect(cv1).toBeDefined();
+    expect(cv2).toBeDefined();
+    expect(antecReceber).toBeDefined();
+    expect(antecPagar).toBeDefined();
+
+    // ===== 2. RV consistente entre RECEBER, PAGAR e VENDA_CARTAO =====
+    expect(receber.metadata.numero_rv).toBe(RV);
+    expect(pagar.metadata.numero_rv).toBe(RV);
+    expect(vendaCartao.metadata.numero_rv).toBe(RV);
+
+    // ===== 3. COMPROVANTEs vinculados ao VENDA_CARTAO pelo id =====
+    expect(cv1.vinculadoA).toBe(vendaCartao.id);
+    expect(cv2.vinculadoA).toBe(vendaCartao.id);
+    expect(cv1.vinculacaoTipo).toBe('automatico');
+    expect(cv2.vinculacaoTipo).toBe('automatico');
+
+    // ===== 4. RV e NSU consistentes nos COMPROVANTEs =====
+    expect(cv1.metadata.numero_rv).toBe(RV);
+    expect(cv2.metadata.numero_rv).toBe(RV);
+    expect(cv1.numeroDocumento).toBe(NSU_1);
+    expect(cv2.numeroDocumento).toBe(NSU_2);
+
+    // ===== 5. VENDA_CARTAO.comprovantes[] contém os mesmos NSUs =====
+    const nsusNoVendaCartao = vendaCartao.metadata.comprovantes.map((c: any) => c.nsu).sort();
+    expect(nsusNoVendaCartao).toEqual([NSU_1, NSU_2].sort());
+
+    // ===== 6. DataPagamento consistente em toda a cadeia =====
+    expect(receber.dataVencimento).toBe(DATA_PGTO_ISO);
+    expect(pagar.dataVencimento).toBe(DATA_PGTO_ISO);
+    expect(vendaCartao.dataVencimento).toBe(DATA_PGTO_ISO);
+    expect(cv1.metadata.data_pagamento).toBe(DATA_PGTO_ISO);
+    expect(cv2.metadata.data_pagamento).toBe(DATA_PGTO_ISO);
+
+    // ===== 7. CodigoEstabelecimento consistente =====
+    expect(cv1.metadata.codigo_estabelecimento.trim()).toBe(COD_ESTAB);
+    expect(cv2.metadata.codigo_estabelecimento.trim()).toBe(COD_ESTAB);
+    expect(receber.metadata.codigo_estabelecimento.trim()).toBe(COD_ESTAB);
+
+    // ===== 8. Bandeira consistente =====
+    expect(cv1.metadata.bandeira).toBe(BANDEIRA);
+    expect(cv2.metadata.bandeira).toBe(BANDEIRA);
+    expect(receber.metadata.bandeira).toBe(BANDEIRA);
+
+    // ===== 9. Taxa proporcional rateada corretamente (2/3 e 1/3) =====
+    // Taxa total = R$ 30.00 → cv1 (400/600 = 2/3) = R$ 20.00, cv2 (200/600 = 1/3) = R$ 10.00
+    expect(cv1.metadata.taxa_proporcional).toBe(20.00);
+    expect(cv2.metadata.taxa_proporcional).toBe(10.00);
+    expect(cv1.metadata.valor_liquido_estimado).toBe(380.00); // 400 - 20
+    expect(cv2.metadata.valor_liquido_estimado).toBe(190.00); // 200 - 10
+
+    // ===== 10. Enriquecimento: antecipação vinculada pelo DataPagamento =====
+    // Taxa antecipação = R$ 12.00 → cv1 (2/3) = R$ 8.00, cv2 (1/3) = R$ 4.00
+    expect(cv1.metadata.antecipacao).toBeDefined();
+    expect(cv2.metadata.antecipacao).toBeDefined();
+    expect(cv1.metadata.antecipacao.numero_operacao).toBe(NUM_OP_ANTEC);
+    expect(cv2.metadata.antecipacao.numero_operacao).toBe(NUM_OP_ANTEC);
+    expect(cv1.metadata.antecipacao.data_original_pagamento).toBe(DATA_PGTO_ISO);
+    expect(cv2.metadata.antecipacao.data_original_pagamento).toBe(DATA_PGTO_ISO);
+    expect(cv1.metadata.antecipacao.taxa_antecipacao_proporcional).toBe(8.00);
+    expect(cv2.metadata.antecipacao.taxa_antecipacao_proporcional).toBe(4.00);
+    // valor_liquido_antecipado = faturamento - taxa_maquineta - taxa_antecipacao
+    // cv1: 400 - 20 - 8 = 372, cv2: 200 - 10 - 4 = 186
+    expect(cv1.metadata.antecipacao.valor_liquido_antecipado).toBe(372.00);
+    expect(cv2.metadata.antecipacao.valor_liquido_antecipado).toBe(186.00);
+
+    // ===== 11. VENDA_CARTAO.comprovantes[] também enriquecido =====
+    const cvRefByNsu = new Map(vendaCartao.metadata.comprovantes.map((c: any) => [c.nsu, c]));
+    const cvRef1 = cvRefByNsu.get(NSU_1) as any;
+    const cvRef2 = cvRefByNsu.get(NSU_2) as any;
+    expect(cvRef1.antecipacao.numero_operacao).toBe(NUM_OP_ANTEC);
+    expect(cvRef2.antecipacao.numero_operacao).toBe(NUM_OP_ANTEC);
+    expect(cvRef1.taxa_proporcional).toBe(20.00);
+    expect(cvRef2.taxa_proporcional).toBe(10.00);
+
+    // ===== 12. Soma das taxas rateadas = taxa total (integridade) =====
+    const somaTaxaMaquineta = cv1.metadata.taxa_proporcional + cv2.metadata.taxa_proporcional;
+    expect(somaTaxaMaquineta).toBe(30.00); // = ValorTaxaDesconto do RV
+
+    const somaTaxaAntecipacao =
+      cv1.metadata.antecipacao.taxa_antecipacao_proporcional +
+      cv2.metadata.antecipacao.taxa_antecipacao_proporcional;
+    expect(somaTaxaAntecipacao).toBe(12.00); // = TaxaAntecipacao do Tipo 4
+  });
 });
 
 // ============================================================================
