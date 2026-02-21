@@ -30,7 +30,7 @@ app.http('health', {
       storage: 'unknown',
       'nibo-ops': 'unknown',
       'santander-ops': 'unknown',
-      'getnet-ops': 'unknown',
+      'getnet-ops': 'integrated', // SFTP direto, sem microservico externo
       'utils-ops': 'unknown',
     };
 
@@ -45,10 +45,11 @@ app.http('health', {
       services.storage = 'error';
     }
 
-    // Check ops services (just check if URLs are configured)
+    // Check ops services (URLs dos microservicos externos)
     services['nibo-ops'] = process.env.NIBO_OPS_URL ? 'configured' : 'not_configured';
     services['santander-ops'] = process.env.SANTANDER_OPS_URL ? 'configured' : 'not_configured';
-    services['getnet-ops'] = process.env.GETNET_OPS_URL ? 'configured' : 'not_configured';
+    // getnet-ops: SFTP integrado — verifica GETNET_USER em vez de URL
+    services['getnet-ops'] = process.env.GETNET_USER ? 'integrated' : 'not_configured';
     services['utils-ops'] = process.env.UTILS_OPS_URL ? 'configured' : 'not_configured';
 
     // AI Pipeline components
