@@ -1022,6 +1022,10 @@ export class SantanderClient {
 
 let clientInstance: SantanderClient | null = null;
 
+/**
+ * Retorna singleton do SantanderClient (env vars globais).
+ * Para multi-tenant, use getSantanderClientForTenant().
+ */
 export function getSantanderClient(): SantanderClient {
   if (!clientInstance) {
     const config: SantanderConfig = {
@@ -1045,6 +1049,17 @@ export function getSantanderClient(): SantanderClient {
   }
 
   return clientInstance;
+}
+
+/**
+ * Cria SantanderClient a partir de credenciais per-client.
+ * NÃO usa singleton — cada cliente tem seus dados bancários.
+ */
+export function getSantanderClientForTenant(config: SantanderConfig): SantanderClient {
+  if (!config.clientId || !config.clientSecret) {
+    throw new Error('Santander clientId and clientSecret are required');
+  }
+  return new SantanderClient(config);
 }
 
 export function resetSantanderClient(): void {

@@ -6,11 +6,13 @@
 
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/functions';
 import * as crypto from 'crypto';
-import { getOmieClient } from '../adapters/client';
+import { getOmieClient, getOmieClientForTenant } from '../adapters/client';
 import { CaptureRequest, CaptureResponse, OmiePayable, OmieReceivable } from '../adapters/types';
 import { createLogger } from '../shared/utils';
 import { getExistingSourceIds, upsertTransactionsIdempotent } from '../../../storage/tableClient';
 import { Transaction, TransactionType, TransactionSource, TransactionStatus } from '../../../types';
+import { getClientById } from '../../shared/storage/clientStorage';
+import { resolveOmieCredentials } from '../../../infra/credentialResolver';
 
 const logger = createLogger('OmieCapture');
 
@@ -93,7 +95,17 @@ app.http('omie-capture', {
         return d.toISOString().split('T')[0];
       })();
 
-      const client = getOmieClient();
+      // Per-client credentials: resolve from ClientConfig, fallback to env vars
+      let client;
+      const clientData = await getClientById(clientId);
+      if (clientData?.config?.omieAppKey && clientData?.config?.omieAppSecret) {
+        const creds = await resolveOmieCredentials(clientData.config, clientData.tenantId);
+        client = getOmieClientForTenant(creds.appKey, creds.appSecret);
+        logger.info('Using per-client Omie credentials', { clientId });
+      } else {
+        client = getOmieClient();
+        logger.info('Using global Omie credentials (env vars)', { clientId });
+      }
 
       // Buscar transações existentes para idempotência
       const existingSourceIds = await getExistingSourceIds(clientId, 'omie');
