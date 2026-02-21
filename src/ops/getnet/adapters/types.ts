@@ -19,25 +19,38 @@ export interface GetnetHeader {
   LinhaRaw: string;
 }
 
-/** Resumo de Vendas (Tipo 1) */
+/** Resumo de Vendas (Tipo 1) — Layout V10.1 oficial */
 export interface GetnetResumoVendas {
   TipoRegistro: 1;
   CodigoEstabelecimento: string;
   Produto: string;
+  /** Forma de captura: MAN (rede/bandeira, valor líquido), POS (terminal, valor bruto real) */
   Bandeira: string;
   NumeroRV: string;
   DataRV: string | null;
   DataPagamento: string | null;
-  CNPJMatriz: string;
-  QuantidadeCV: number;
+  Banco: string;
+  Agencia: string;
+  ContaCorrente: string;
+  CVsAceitos: number;
+  CVsRejeitados: number;
   ValorBruto: number;
   ValorLiquido: number;
-  ValorTarifa: number;
+  ValorTaxaServico: number;
+  ValorTaxaDesconto: number;
+  ValorRejeitado: number;
+  ValorCredito: number;
+  ValorEncargos: number;
   TipoPagamento: string;
-  LinhaRaw: string;
-  /** Debug: campo [72:84] marcado como 'reservado' no layout — verificar se é valor bruto original */
-  _debug_campo72_84: string;
-  _debug_campo72_84_valor: number;
+  NumeroParcela: number;
+  QuantidadeParcelas: number;
+  CodigoEstabelecimentoCentralizador: string;
+  /**
+   * true quando Bandeira=MAN e ValorTaxaDesconto=0: indica que ValorBruto já está
+   * descontado da taxa da maquineta (a Getnet reporta o líquido como "bruto" nos registros MAN).
+   * O bruto REAL vem do registro POS pareado (mesmo ValorLiquido + DataPagamento).
+   */
+  isBrutoDescontado: boolean;
 }
 
 /** Comprovante de Vendas (Tipo 2) */
