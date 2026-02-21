@@ -1117,6 +1117,13 @@ describe('Getnet Capture Handler', () => {
     expect(vendaCartao.metadata.comprovantes[0].total_parcelas).toBe('03');
     expect(vendaCartao.metadata.comprovantes[0].valor_parcela).toBe(66.67);
 
+    // Taxa proporcional no resumo de comprovantes do VENDA_CARTAO
+    // RV tem ValorBruto=400, Taxa=20, cada CV=200 (50% do bruto) → taxa=10 cada
+    expect(vendaCartao.metadata.comprovantes[0].taxa_proporcional).toBe(10.00);
+    expect(vendaCartao.metadata.comprovantes[0].valor_liquido_estimado).toBe(190.00);
+    expect(vendaCartao.metadata.comprovantes[1].taxa_proporcional).toBe(10.00);
+    expect(vendaCartao.metadata.comprovantes[1].valor_liquido_estimado).toBe(190.00);
+
     // COMPROVANTEs vinculados ao VENDA_CARTAO (rastreabilidade)
     for (const cv of comprovantes) {
       expect(cv.vinculadoA).toBe(vendaCartao.id);
@@ -1127,6 +1134,8 @@ describe('Getnet Capture Handler', () => {
       expect(cv.metadata.parcela_atual).toBe('01');
       expect(cv.metadata.total_parcelas).toBe('03');
       expect(cv.metadata.valor_parcela).toBe(66.67);
+      expect(cv.metadata.taxa_proporcional).toBe(10.00);        // taxa rateada
+      expect(cv.metadata.valor_liquido_estimado).toBe(190.00);  // faturamento - taxa
       expect(cv.metadata.data_transacao).toBeDefined();
       expect(cv.metadata.data_pagamento).toBeDefined();
     }

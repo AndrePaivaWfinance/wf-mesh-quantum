@@ -150,18 +150,27 @@ function vendaToVendaCartao(
     ? comprovantes.reduce((sum, cv) => sum + cv.ValorTransacao, 0)
     : venda.ValorBruto;
 
-  const comprovantesRef = comprovantes?.map(cv => ({
-    nsu: cv.NSU,
-    valor_faturamento: cv.ValorTransacao,
-    parcela_atual: cv.Parcela,
-    total_parcelas: cv.TotalParcelas,
-    valor_parcela: cv.ValorParcela,
-    data_transacao: cv.DataTransacao,
-    data_pagamento: cv.DataPagamento,
-    numero_cartao: cv.NumeroCartao,
-    codigo_autorizacao: cv.CodigoAutorizacao,
-    bandeira: cv.Bandeira,
-  }));
+  const comprovantesRef = comprovantes?.map(cv => {
+    // Taxa proporcional: peso do comprovante no RV * taxa total do RV
+    const peso = venda.ValorBruto > 0 ? cv.ValorTransacao / venda.ValorBruto : 0;
+    const taxaProporcional = Math.round(venda.ValorTaxaDesconto * peso * 100) / 100;
+    const valorLiquidoEstimado = Math.round((cv.ValorTransacao - taxaProporcional) * 100) / 100;
+
+    return {
+      nsu: cv.NSU,
+      valor_faturamento: cv.ValorTransacao,
+      parcela_atual: cv.Parcela,
+      total_parcelas: cv.TotalParcelas,
+      valor_parcela: cv.ValorParcela,
+      taxa_proporcional: taxaProporcional,
+      valor_liquido_estimado: valorLiquidoEstimado,
+      data_transacao: cv.DataTransacao,
+      data_pagamento: cv.DataPagamento,
+      numero_cartao: cv.NumeroCartao,
+      codigo_autorizacao: cv.CodigoAutorizacao,
+      bandeira: cv.Bandeira,
+    };
+  });
 
   return {
     id: `getnet-venda-${shortHash(sourceId)}`,
@@ -202,7 +211,8 @@ function vendaToVendaCartao(
  * Converte comprovante de vendas (Tipo 2) em transação COMPROVANTE (documento de referência)
  *
  * O comprovante é o registro individual de cada transação no cartão.
- * Carrega o valor de faturamento (ValorTransacao) e dados de parcelamento.
+ * Carrega o valor de faturamento (ValorTransacao), dados de parcelamento,
+ * e a taxa proporcional rateada do Resumo de Vendas (Tipo 1).
  * Vinculado ao VENDA_CARTAO do mesmo RV.
  */
 function comprovanteToTransaction(
@@ -210,9 +220,13 @@ function comprovanteToTransaction(
   clientId: string,
   cycleId: string,
   dataMovimento: string,
-  vendaCartaoId?: string
+  vendaCartaoId?: string,
+  taxaProporcional?: number
 ): Transaction {
   const sourceId = `getnet-cv-${comprovante.NumeroRV}-${comprovante.NSU}`;
+  const taxa = taxaProporcional ?? 0;
+  const valorLiquidoEstimado = Math.round((comprovante.ValorTransacao - taxa) * 100) / 100;
+
   return {
     id: `getnet-cv-${shortHash(sourceId)}`,
     clientId,
@@ -248,6 +262,8 @@ function comprovanteToTransaction(
       parcela_atual: comprovante.Parcela,
       total_parcelas: comprovante.TotalParcelas,
       valor_parcela: comprovante.ValorParcela,
+      taxa_proporcional: taxa,
+      valor_liquido_estimado: valorLiquidoEstimado,
       data_transacao: comprovante.DataTransacao,
       hora_transacao: comprovante.HoraTransacao,
       data_pagamento: comprovante.DataPagamento,
@@ -575,9 +591,12 @@ function gerarTransacoes(
     totalVendas++;
 
     // Criar transações COMPROVANTE (documento de referência) vinculadas à venda
+    // Taxa proporcional: rateio da ValorTaxaDesconto do RV pelo peso de cada CV
     if (cvsDaVenda) {
       for (const cv of cvsDaVenda) {
-        transactions.push(comprovanteToTransaction(cv, clientId, cycleId, dataMovimento, vendaCartao.id));
+        const peso = venda.ValorBruto > 0 ? cv.ValorTransacao / venda.ValorBruto : 0;
+        const taxaProporcional = Math.round(venda.ValorTaxaDesconto * peso * 100) / 100;
+        transactions.push(comprovanteToTransaction(cv, clientId, cycleId, dataMovimento, vendaCartao.id, taxaProporcional));
       }
     }
   }
