@@ -164,23 +164,26 @@ export interface Client {
 export interface ClientConfig {
   // Credenciais ERP - Nibo
   niboTenantId?: string;
-  niboApiKey?: string;
+  niboApiKey?: string; // login → Table Storage
 
   // Credenciais ERP - Omie
-  omieAppKey?: string;
-  omieAppSecret?: string;
+  omieAppKey?: string; // login → Table Storage (secret via KV)
+  omieAppSecret?: string; // legado — novos clientes usam "kv:{tenantId}-OMIE-APP-SECRET"
 
   // Credenciais ERP - Controlle
   controlleApiKey?: string;
 
-  // Banco
+  // Banco - Santander
   banco?: string;
   bancoAgencia?: string;
   bancoConta?: string;
+  bancoContaDigito?: string;
+  santanderClientId?: string; // login OAuth → Table Storage (secret via KV)
 
-  // Adquirente
+  // Adquirente - Getnet
   adquirente?: string;
   getnetEstabelecimento?: string;
+  getnetUser?: string; // login SFTP → Table Storage (password via KV)
 
   // Notificações
   notificacoes: {

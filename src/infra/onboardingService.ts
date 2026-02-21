@@ -1,11 +1,15 @@
 /**
  * OnboardingService - Orquestra o cadastro de credenciais de um cliente
  *
+ * REGRA:
+ *   Login/identificador → ClientConfig (Table Storage, grátis)
+ *   Secret/senha        → Key Vault (com cache 15 min)
+ *
  * Fluxo:
  *   1. Recebe dados brutos do endpoint
  *   2. Valida campos obrigatórios por fonte
- *   3. Salva secrets no Key Vault (sensíveis)
- *   4. Salva config no ClientConfig (não-sensíveis)
+ *   3. Salva logins no ClientConfig
+ *   4. Salva secrets no Key Vault
  *   5. Testa conexão de cada fonte
  *   6. Retorna checklist com status
  */
@@ -21,30 +25,29 @@ const logger = createLogger('OnboardingService');
 // TIPOS
 // ============================================================================
 
-/** Dados de entrada para onboarding */
 export interface OnboardingInput {
   clientId: string;
 
   omie?: {
-    appKey: string;
-    appSecret: string;
+    appKey: string;     // login → Table
+    appSecret: string;  // secret → KV
   };
 
   santander?: {
-    clientId: string;
-    clientSecret: string;
-    agencia: string;
-    conta: string;
-    contaDigito?: string;
+    clientId: string;     // login → Table
+    clientSecret: string; // secret → KV
+    agencia: string;      // dado bancário → Table
+    conta: string;        // dado bancário → Table
+    contaDigito?: string; // dado bancário → Table
     convenio?: string;
-    certBase64?: string;
-    keyBase64?: string;
+    certBase64?: string;  // secret → KV
+    keyBase64?: string;   // secret → KV
   };
 
   getnet?: {
-    user: string;
-    password: string;
-    estabelecimento: string;
+    user: string;           // login → Table
+    password: string;       // secret → KV (compartilhado)
+    estabelecimento: string; // config → Table
   };
 
   notificacoes?: {
@@ -53,72 +56,33 @@ export interface OnboardingInput {
   };
 }
 
-/** Status de uma fonte individual */
 export interface SourceStatus {
   configured: boolean;
   secretsSaved: boolean;
   tested: boolean;
   error?: string;
-  fields: { name: string; status: 'ok' | 'missing' | 'saved_to_kv' }[];
+  fields: { name: string; status: 'ok' | 'missing' | 'saved_to_kv' | 'saved_to_table' }[];
 }
 
-/** Resultado do onboarding */
 export interface OnboardingResult {
   clientId: string;
   tenantId: string;
   nome: string;
-
   sources: {
     omie?: SourceStatus;
     santander?: SourceStatus;
     getnet?: SourceStatus;
   };
-
   ready: boolean;
   status: ClientStatus;
   nextSteps: string[];
 }
 
 // ============================================================================
-// CAMPOS OBRIGATÓRIOS POR FONTE
-// ============================================================================
-
-interface FieldDef {
-  field: string;
-  label: string;
-  sensitive: boolean;
-  kvName?: string;
-  optional?: boolean;
-}
-
-const REQUIRED_FIELDS: Record<string, FieldDef[]> = {
-  omie: [
-    { field: 'appKey', label: 'Omie App Key', sensitive: true, kvName: SECRET_NAMES.omie.APP_KEY },
-    { field: 'appSecret', label: 'Omie App Secret', sensitive: true, kvName: SECRET_NAMES.omie.APP_SECRET },
-  ],
-  santander: [
-    { field: 'clientId', label: 'Santander Client ID (OAuth)', sensitive: true, kvName: SECRET_NAMES.santander.CLIENT_ID },
-    { field: 'clientSecret', label: 'Santander Client Secret (OAuth)', sensitive: true, kvName: SECRET_NAMES.santander.CLIENT_SECRET },
-    { field: 'agencia', label: 'Agência', sensitive: false },
-    { field: 'conta', label: 'Conta corrente', sensitive: false },
-    { field: 'contaDigito', label: 'Dígito da conta', sensitive: false, optional: true },
-    { field: 'convenio', label: 'Convênio', sensitive: false, optional: true },
-    { field: 'certBase64', label: 'Certificado mTLS (Base64)', sensitive: true, kvName: SECRET_NAMES.santander.CERT_BASE64, optional: true },
-    { field: 'keyBase64', label: 'Chave mTLS (Base64)', sensitive: true, kvName: SECRET_NAMES.santander.KEY_BASE64, optional: true },
-  ],
-  getnet: [
-    { field: 'user', label: 'Usuário SFTP Getnet', sensitive: false },
-    { field: 'password', label: 'Senha SFTP Getnet', sensitive: true, kvName: SECRET_NAMES.getnet.PASSWORD },
-    { field: 'estabelecimento', label: 'Código do estabelecimento', sensitive: false },
-  ],
-};
-
-// ============================================================================
 // SERVICE
 // ============================================================================
 
 export async function executeOnboarding(input: OnboardingInput): Promise<OnboardingResult> {
-  // 1. Buscar cliente existente
   const client = await getClientById(input.clientId);
   if (!client) {
     throw new Error(`Cliente ${input.clientId} não encontrado`);
@@ -138,7 +102,7 @@ export async function executeOnboarding(input: OnboardingInput): Promise<Onboard
 
   const configUpdates: Partial<ClientConfig> = {};
 
-  // 2. Processar cada fonte
+  // Processar cada fonte
   if (client.sistema === 'omie') {
     result.sources.omie = await processOmie(client, input.omie, configUpdates);
   }
@@ -151,7 +115,7 @@ export async function executeOnboarding(input: OnboardingInput): Promise<Onboard
     result.sources.getnet = await processGetnet(client, input.getnet, configUpdates);
   }
 
-  // 3. Processar notificações
+  // Notificações
   if (input.notificacoes) {
     if (input.notificacoes.emailDestino) {
       configUpdates.notificacoes = {
@@ -168,7 +132,7 @@ export async function executeOnboarding(input: OnboardingInput): Promise<Onboard
     }
   }
 
-  // 4. Salvar config atualizada
+  // Salvar config atualizada (logins + dados bancários)
   const updatedClient: Client = {
     ...client,
     config: { ...client.config, ...configUpdates },
@@ -176,17 +140,15 @@ export async function executeOnboarding(input: OnboardingInput): Promise<Onboard
   };
   await upsertClient(updatedClient);
 
-  // 5. Avaliar se está pronto
+  // Avaliar se está pronto
   const allSources = Object.values(result.sources);
   const allConfigured = allSources.length > 0 && allSources.every((s) => s.configured);
   const allTested = allSources.every((s) => s.tested);
-
   result.ready = allConfigured && allTested;
 
-  // 6. Montar próximos passos
+  // Montar próximos passos
   result.nextSteps = buildNextSteps(result);
 
-  // 7. Se tudo ok e status é onboarding, sugerir ativação
   if (result.ready && client.status === ClientStatus.ONBOARDING) {
     result.nextSteps.push(
       'Todas as fontes configuradas e testadas! Use PUT /api/bpo/clientes/{id} com status:"ativo" para ativar.'
@@ -198,8 +160,7 @@ export async function executeOnboarding(input: OnboardingInput): Promise<Onboard
 }
 
 /**
- * Retorna checklist de um cliente SEM processar novos dados.
- * Útil para ver o que falta.
+ * Checklist sem novos dados — verifica estado atual.
  */
 export async function getOnboardingChecklist(clientId: string): Promise<OnboardingResult> {
   const client = await getClientById(clientId);
@@ -217,15 +178,12 @@ export async function getOnboardingChecklist(clientId: string): Promise<Onboardi
     nextSteps: [],
   };
 
-  // Verificar cada fonte
   if (client.sistema === 'omie') {
     result.sources.omie = await checkOmieStatus(client);
   }
-
   if (client.config.banco === 'santander') {
     result.sources.santander = await checkSantanderStatus(client);
   }
-
   if (client.config.adquirente === 'getnet') {
     result.sources.getnet = await checkGetnetStatus(client);
   }
@@ -246,34 +204,28 @@ async function processOmie(
   data: OnboardingInput['omie'],
   configUpdates: Partial<ClientConfig>
 ): Promise<SourceStatus> {
+  if (!data) return checkOmieStatus(client);
+
   const fields: SourceStatus['fields'] = [];
   let configured = true;
 
-  if (!data) {
-    // Verificar se já foi configurado antes
-    return checkOmieStatus(client);
+  // Login → Table Storage
+  if (data.appKey) {
+    configUpdates.omieAppKey = data.appKey;
+    fields.push({ name: 'Omie App Key (login)', status: 'saved_to_table' });
+  } else {
+    fields.push({ name: 'Omie App Key (login)', status: 'missing' });
+    configured = false;
   }
 
-  // Salvar secrets no Key Vault
-  for (const def of REQUIRED_FIELDS.omie) {
-    const value = (data as any)[def.field] as string;
-    if (!value) {
-      fields.push({ name: def.label, status: 'missing' });
-      configured = false;
-      continue;
-    }
-
-    if (def.sensitive && def.kvName) {
-      await setTenantSecret(client.tenantId, def.kvName, value);
-      fields.push({ name: def.label, status: 'saved_to_kv' });
-    } else {
-      fields.push({ name: def.label, status: 'ok' });
-    }
+  // Secret → Key Vault
+  if (data.appSecret) {
+    await setTenantSecret(client.tenantId, SECRET_NAMES.omie.APP_SECRET, data.appSecret);
+    fields.push({ name: 'Omie App Secret (senha)', status: 'saved_to_kv' });
+  } else {
+    fields.push({ name: 'Omie App Secret (senha)', status: 'missing' });
+    configured = false;
   }
-
-  // Salvar referência no ClientConfig (sem o valor real, só flag de que existe)
-  configUpdates.omieAppKey = `kv:${client.tenantId}-${SECRET_NAMES.omie.APP_KEY}`;
-  configUpdates.omieAppSecret = `kv:${client.tenantId}-${SECRET_NAMES.omie.APP_SECRET}`;
 
   // Testar conexão
   let tested = false;
@@ -298,35 +250,60 @@ async function processSantander(
   data: OnboardingInput['santander'],
   configUpdates: Partial<ClientConfig>
 ): Promise<SourceStatus> {
+  if (!data) return checkSantanderStatus(client);
+
   const fields: SourceStatus['fields'] = [];
   let configured = true;
 
-  if (!data) {
-    return checkSantanderStatus(client);
+  // Login → Table Storage
+  if (data.clientId) {
+    configUpdates.santanderClientId = data.clientId;
+    fields.push({ name: 'Santander Client ID (login)', status: 'saved_to_table' });
+  } else {
+    fields.push({ name: 'Santander Client ID (login)', status: 'missing' });
+    configured = false;
   }
 
-  // Salvar secrets no Key Vault
-  for (const def of REQUIRED_FIELDS.santander) {
-    const value = (data as any)[def.field] as string;
-    if (!value && !def.optional) {
-      fields.push({ name: def.label, status: 'missing' });
-      configured = false;
-      continue;
-    }
-    if (!value && def.optional) continue;
-
-    if (def.sensitive && def.kvName) {
-      await setTenantSecret(client.tenantId, def.kvName, value);
-      fields.push({ name: def.label, status: 'saved_to_kv' });
-    } else {
-      fields.push({ name: def.label, status: 'ok' });
-    }
+  // Dados bancários → Table Storage
+  if (data.agencia) {
+    configUpdates.bancoAgencia = data.agencia;
+    fields.push({ name: 'Agência', status: 'saved_to_table' });
+  } else {
+    fields.push({ name: 'Agência', status: 'missing' });
+    configured = false;
   }
 
-  // Salvar dados não-sensíveis no ClientConfig
+  if (data.conta) {
+    configUpdates.bancoConta = data.conta;
+    fields.push({ name: 'Conta corrente', status: 'saved_to_table' });
+  } else {
+    fields.push({ name: 'Conta corrente', status: 'missing' });
+    configured = false;
+  }
+
+  if (data.contaDigito) {
+    configUpdates.bancoContaDigito = data.contaDigito;
+  }
   configUpdates.banco = 'santander';
-  configUpdates.bancoAgencia = data.agencia;
-  configUpdates.bancoConta = data.conta;
+
+  // Secret → Key Vault
+  if (data.clientSecret) {
+    await setTenantSecret(client.tenantId, SECRET_NAMES.santander.CLIENT_SECRET, data.clientSecret);
+    fields.push({ name: 'Santander Client Secret (senha)', status: 'saved_to_kv' });
+  } else {
+    fields.push({ name: 'Santander Client Secret (senha)', status: 'missing' });
+    configured = false;
+  }
+
+  // Certs mTLS (opcionais) → Key Vault
+  if (data.certBase64) {
+    await setTenantSecret(client.tenantId, SECRET_NAMES.santander.CERT_BASE64, data.certBase64);
+    fields.push({ name: 'Certificado mTLS', status: 'saved_to_kv' });
+  }
+  if (data.keyBase64) {
+    await setTenantSecret(client.tenantId, SECRET_NAMES.santander.KEY_BASE64, data.keyBase64);
+    fields.push({ name: 'Chave mTLS', status: 'saved_to_kv' });
+  }
 
   // Testar conexão
   let tested = false;
@@ -334,7 +311,7 @@ async function processSantander(
   if (configured) {
     try {
       const { SantanderClient } = await import('../ops/santander/adapters/client');
-      const santanderConfig = {
+      const santanderClient = new SantanderClient({
         clientId: data.clientId,
         clientSecret: data.clientSecret,
         environment: 'sandbox' as const,
@@ -344,9 +321,7 @@ async function processSantander(
         convenio: data.convenio,
         certBase64: data.certBase64,
         keyBase64: data.keyBase64,
-      };
-      const santanderClient = new SantanderClient(santanderConfig);
-      // Testar obtendo token OAuth (valida clientId/clientSecret)
+      });
       await santanderClient.getToken();
       tested = true;
       santanderClient.cleanup();
@@ -363,34 +338,37 @@ async function processGetnet(
   data: OnboardingInput['getnet'],
   configUpdates: Partial<ClientConfig>
 ): Promise<SourceStatus> {
+  if (!data) return checkGetnetStatus(client);
+
   const fields: SourceStatus['fields'] = [];
   let configured = true;
 
-  if (!data) {
-    return checkGetnetStatus(client);
+  // Login → Table Storage
+  if (data.user) {
+    configUpdates.getnetUser = data.user;
+    fields.push({ name: 'Usuário SFTP (login)', status: 'saved_to_table' });
+  } else {
+    fields.push({ name: 'Usuário SFTP (login)', status: 'missing' });
+    configured = false;
   }
 
-  // Getnet: password é compartilhado (mesmo SFTP para todos)
-  for (const def of REQUIRED_FIELDS.getnet) {
-    const value = (data as any)[def.field] as string;
-    if (!value) {
-      fields.push({ name: def.label, status: 'missing' });
-      configured = false;
-      continue;
-    }
-
-    if (def.sensitive && def.kvName) {
-      // Getnet password é compartilhado — salva sem prefixo de tenant
-      await setTenantSecret('', def.kvName, value);
-      fields.push({ name: def.label, status: 'saved_to_kv' });
-    } else {
-      fields.push({ name: def.label, status: 'ok' });
-    }
+  if (data.estabelecimento) {
+    configUpdates.getnetEstabelecimento = data.estabelecimento;
+    configUpdates.adquirente = 'getnet';
+    fields.push({ name: 'Estabelecimento', status: 'saved_to_table' });
+  } else {
+    fields.push({ name: 'Estabelecimento', status: 'missing' });
+    configured = false;
   }
 
-  // Salvar dados não-sensíveis no ClientConfig
-  configUpdates.adquirente = 'getnet';
-  configUpdates.getnetEstabelecimento = data.estabelecimento;
+  // Secret → Key Vault (compartilhado)
+  if (data.password) {
+    await setTenantSecret('', SECRET_NAMES.getnet.PASSWORD, data.password);
+    fields.push({ name: 'Senha SFTP (senha)', status: 'saved_to_kv' });
+  } else {
+    fields.push({ name: 'Senha SFTP (senha)', status: 'missing' });
+    configured = false;
+  }
 
   return { configured, secretsSaved: true, tested: false, fields };
 }
@@ -402,51 +380,43 @@ async function processGetnet(
 async function checkOmieStatus(client: Client): Promise<SourceStatus> {
   const fields: SourceStatus['fields'] = [];
 
-  const hasKey = await hasTenantSecret(client.tenantId, SECRET_NAMES.omie.APP_KEY);
+  const hasLogin = !!client.config.omieAppKey;
   const hasSecret = await hasTenantSecret(client.tenantId, SECRET_NAMES.omie.APP_SECRET);
 
-  // Também aceita se o ClientConfig tem valor direto (legado)
-  const hasKeyLegacy = !!client.config.omieAppKey && !client.config.omieAppKey.startsWith('kv:');
-  const hasSecretLegacy = !!client.config.omieAppSecret && !client.config.omieAppSecret.startsWith('kv:');
+  fields.push({ name: 'Omie App Key (login)', status: hasLogin ? 'ok' : 'missing' });
+  fields.push({ name: 'Omie App Secret (senha)', status: hasSecret ? 'ok' : 'missing' });
 
-  fields.push({ name: 'Omie App Key', status: (hasKey || hasKeyLegacy) ? 'ok' : 'missing' });
-  fields.push({ name: 'Omie App Secret', status: (hasSecret || hasSecretLegacy) ? 'ok' : 'missing' });
-
-  const configured = (hasKey || hasKeyLegacy) && (hasSecret || hasSecretLegacy);
-  return { configured, secretsSaved: hasKey && hasSecret, tested: false, fields };
+  return { configured: hasLogin && hasSecret, secretsSaved: hasSecret, tested: false, fields };
 }
 
 async function checkSantanderStatus(client: Client): Promise<SourceStatus> {
   const fields: SourceStatus['fields'] = [];
 
-  const hasClientId = await hasTenantSecret(client.tenantId, SECRET_NAMES.santander.CLIENT_ID);
-  const hasClientSecret = await hasTenantSecret(client.tenantId, SECRET_NAMES.santander.CLIENT_SECRET);
+  const hasLogin = !!client.config.santanderClientId;
+  const hasSecret = await hasTenantSecret(client.tenantId, SECRET_NAMES.santander.CLIENT_SECRET);
   const hasAgencia = !!client.config.bancoAgencia;
   const hasConta = !!client.config.bancoConta;
 
-  fields.push({ name: 'Santander Client ID', status: hasClientId ? 'ok' : 'missing' });
-  fields.push({ name: 'Santander Client Secret', status: hasClientSecret ? 'ok' : 'missing' });
+  fields.push({ name: 'Santander Client ID (login)', status: hasLogin ? 'ok' : 'missing' });
+  fields.push({ name: 'Santander Client Secret (senha)', status: hasSecret ? 'ok' : 'missing' });
   fields.push({ name: 'Agência', status: hasAgencia ? 'ok' : 'missing' });
   fields.push({ name: 'Conta corrente', status: hasConta ? 'ok' : 'missing' });
 
-  const configured = hasClientId && hasClientSecret && hasAgencia && hasConta;
-  return { configured, secretsSaved: hasClientId && hasClientSecret, tested: false, fields };
+  return { configured: hasLogin && hasSecret && hasAgencia && hasConta, secretsSaved: hasSecret, tested: false, fields };
 }
 
 async function checkGetnetStatus(client: Client): Promise<SourceStatus> {
   const fields: SourceStatus['fields'] = [];
 
-  // Getnet password é compartilhado
+  const hasUser = !!client.config.getnetUser || !!process.env.GETNET_USER;
   const hasPassword = await hasTenantSecret('', SECRET_NAMES.getnet.PASSWORD);
   const hasEstabelecimento = !!client.config.getnetEstabelecimento;
-  const hasUser = !!process.env.GETNET_USER;
 
-  fields.push({ name: 'Usuário SFTP', status: hasUser ? 'ok' : 'missing' });
-  fields.push({ name: 'Senha SFTP', status: hasPassword ? 'ok' : 'missing' });
+  fields.push({ name: 'Usuário SFTP (login)', status: hasUser ? 'ok' : 'missing' });
+  fields.push({ name: 'Senha SFTP (senha)', status: hasPassword ? 'ok' : 'missing' });
   fields.push({ name: 'Estabelecimento', status: hasEstabelecimento ? 'ok' : 'missing' });
 
-  const configured = hasPassword && hasEstabelecimento && hasUser;
-  return { configured, secretsSaved: hasPassword, tested: false, fields };
+  return { configured: hasUser && hasPassword && hasEstabelecimento, secretsSaved: hasPassword, tested: false, fields };
 }
 
 // ============================================================================
@@ -460,9 +430,7 @@ function buildNextSteps(result: OnboardingResult): string[] {
     if (!status) continue;
     const missing = status.fields.filter((f) => f.status === 'missing');
     if (missing.length > 0) {
-      steps.push(
-        `${sourceName}: preencher ${missing.map((f) => f.name).join(', ')}`
-      );
+      steps.push(`${sourceName}: preencher ${missing.map((f) => f.name).join(', ')}`);
     }
     if (status.configured && !status.tested) {
       steps.push(`${sourceName}: testar conexão`);
