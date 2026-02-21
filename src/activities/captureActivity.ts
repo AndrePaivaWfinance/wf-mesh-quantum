@@ -53,7 +53,7 @@ df.app.activity('captureActivity', {
       // Call the ops service
       const result = await withRetry(
         async () => {
-          const response = await fetch(`${opsUrl}/api/capture`, {
+          const response = await fetch(`${opsUrl}/api/${source}/capture`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -88,7 +88,9 @@ df.app.activity('captureActivity', {
         const sourceMap: Record<string, TransactionSource> = {
           nibo: TransactionSource.NIBO,
           omie: TransactionSource.OMIE,
+          controlle: TransactionSource.CONTROLLE,
           santander: TransactionSource.SANTANDER,
+          inter: TransactionSource.INTER,
           getnet: TransactionSource.GETNET,
           ofx: TransactionSource.OFX,
         };
@@ -182,7 +184,9 @@ function getOpsUrl(source: string): string {
   const urls: Record<string, string | undefined> = {
     nibo: process.env.NIBO_OPS_URL,
     omie: process.env.OMIE_OPS_URL,
+    controlle: process.env.CONTROLLE_OPS_URL,
     santander: process.env.SANTANDER_OPS_URL,
+    inter: process.env.INTER_OPS_URL,
     getnet: process.env.GETNET_OPS_URL,
     ofx: process.env.UTILS_OPS_URL,
   };
@@ -193,7 +197,9 @@ function getOpsKey(source: string): string {
   const keys: Record<string, string | undefined> = {
     nibo: process.env.NIBO_OPS_KEY,
     omie: process.env.OMIE_OPS_KEY,
+    controlle: process.env.CONTROLLE_OPS_KEY,
     santander: process.env.SANTANDER_OPS_KEY,
+    inter: process.env.INTER_OPS_KEY,
     getnet: process.env.GETNET_OPS_KEY,
     ofx: process.env.UTILS_OPS_KEY,
   };

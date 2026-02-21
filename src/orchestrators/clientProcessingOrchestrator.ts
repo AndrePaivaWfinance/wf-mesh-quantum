@@ -40,9 +40,10 @@ const clientOrchestrator: OrchestrationHandler = function* (context: Orchestrati
             throw new Error(`Rate limit exceeded for client ${clientId}`);
         }
 
-        // 2. Capture (Fan-out)
-        // ... (logic from main orchestrator moves here)
-        const sources = ['nibo', 'santander']; // Todo: derive from config
+        // 2. Capture (Fan-out) — sources derivados da config do cliente
+        const sources: string[] = tenantConfig.sources && tenantConfig.sources.length > 0
+            ? tenantConfig.sources
+            : ['nibo', 'santander', 'getnet']; // fallback seguro
         const captureTasks = sources.map(source =>
             context.df.callActivity('captureActivity', { clientId, cycleId, source })
         );

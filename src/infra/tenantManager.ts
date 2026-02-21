@@ -19,6 +19,7 @@ export interface TenantConfig {
     clientId: string;
     tenantId: string;
     plan: string;
+    sources: string[];
     features: {
         aiClassification: boolean;
         autoSync: boolean;
@@ -39,7 +40,7 @@ interface CacheEntry {
 }
 
 // Mapeamento Plano -> Features/Limites
-const PLAN_CONFIGS: Record<string, Omit<TenantConfig, 'clientId' | 'tenantId' | 'plan'>> = {
+const PLAN_CONFIGS: Record<string, Omit<TenantConfig, 'clientId' | 'tenantId' | 'plan' | 'sources'>> = {
     [ClientPlano.ESSENCIAL]: {
         features: {
             aiClassification: true,
@@ -132,6 +133,7 @@ export class TenantManager {
             clientId: client.id,
             tenantId: client.tenantId,
             plan: client.plano,
+            sources: this.deriveSources(client),
             ...planConfig,
         };
     }
@@ -141,7 +143,36 @@ export class TenantManager {
             clientId,
             tenantId: clientId,
             plan: ClientPlano.ESSENCIAL,
+            sources: ['nibo', 'santander', 'getnet'],
             ...DEFAULT_CONFIG,
         };
+    }
+
+    /**
+     * Deriva os ingestores ativos a partir da configuração do cliente.
+     *
+     * - sistema  → ERP (nibo | omie | controlle)
+     * - config.banco → Banco (santander | inter)
+     * - config.adquirente → Adquirente (getnet)
+     */
+    private deriveSources(client: Client): string[] {
+        const sources: string[] = [];
+
+        // ERP — sempre presente
+        if (client.sistema) {
+            sources.push(client.sistema); // 'nibo' | 'omie' | 'controlle'
+        }
+
+        // Banco
+        if (client.config?.banco) {
+            sources.push(client.config.banco); // 'santander' | 'inter'
+        }
+
+        // Adquirente
+        if (client.config?.adquirente) {
+            sources.push(client.config.adquirente); // 'getnet'
+        }
+
+        return sources;
     }
 }
