@@ -508,8 +508,10 @@ function filtrarResumosVendas(
   logger.info(`Data do arquivo: ${dataMovimento} | Filtrando DataRV = ${dataD1}`);
 
   // Separar por tipo de produto
-  const resumosDebito = resumos.filter(r => r.Produto === 'SE');
-  const resumosCredito = resumos.filter(r => r.Produto !== 'SE');
+  // SE = Santander Eletrônico (débito), SR = Santander Rede (débito)
+  const PRODUTOS_DEBITO = new Set(['SE', 'SR']);
+  const resumosDebito = resumos.filter(r => PRODUTOS_DEBITO.has(r.Produto));
+  const resumosCredito = resumos.filter(r => !PRODUTOS_DEBITO.has(r.Produto));
 
   // DÉBITO: Filtrar apenas por DataRV == D-1
   let debitoProcessados: GetnetResumoVendas[];
